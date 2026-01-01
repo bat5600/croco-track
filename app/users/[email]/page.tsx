@@ -20,13 +20,14 @@ export default async function UserPage({
   params: { email: string };
   searchParams?: { location_id?: string; location?: string };
 }) {
-  const decodedEmail = decodeURIComponent(params.email);
+  // ✅ decode une seule fois, et on utilise CETTE variable partout
+  const email = decodeURIComponent(params.email);
   const location_id = searchParams?.location_id || searchParams?.location || "";
 
   if (!location_id) {
     return (
       <main style={pageShell()}>
-        <h1 style={{ fontSize: 28 }}>{decodedEmail}</h1>
+        <h1 style={{ fontSize: 28 }}>{email}</h1>
         <p style={{ opacity: 0.8 }}>
           Il manque <code>?location_id=...</code> dans l’URL.
         </p>
@@ -39,14 +40,14 @@ export default async function UserPage({
   const { data: lastSeen, error: e1 } = await supabaseAdmin
     .from("user_last_seen")
     .select("email, location_id, last_seen_at, last_url")
-    .eq("email", decodedEmail)
+    .eq("email", email)
     .eq("location_id", location_id)
     .maybeSingle();
 
   if (e1) {
     return (
       <main style={pageShell()}>
-        <h1 style={{ fontSize: 28 }}>{decodedEmail}</h1>
+        <h1 style={{ fontSize: 28 }}>{email}</h1>
         <pre style={{ whiteSpace: "pre-wrap" }}>{e1.message}</pre>
       </main>
     );
@@ -55,12 +56,12 @@ export default async function UserPage({
   // 2) health + risk
   const [{ data: health }, { data: risk }] = await Promise.all([
     supabaseAdmin.rpc("gocroco_user_health", {
-      target_email: decodedEmail,
+      target_email: email,
       target_location_id: location_id,
       ref_day: null,
     }),
     supabaseAdmin.rpc("gocroco_user_risk_drivers", {
-      target_email: decodedEmail,
+      target_email: email,
       target_location_id: location_id,
       ref_day: null,
     }),
@@ -70,7 +71,7 @@ export default async function UserPage({
   const { data: lifetime, error: e2 } = await supabaseAdmin
     .from("user_feature_lifetime")
     .select("feature_key, time_sec, last_seen_at")
-    .eq("email", decodedEmail)
+    .eq("email", email)
     .eq("location_id", location_id)
     .order("time_sec", { ascending: false })
     .limit(20);
@@ -78,7 +79,7 @@ export default async function UserPage({
   if (e2) {
     return (
       <main style={pageShell()}>
-        <h1 style={{ fontSize: 28 }}>{decodedEmail}</h1>
+        <h1 style={{ fontSize: 28 }}>{email}</h1>
         <pre style={{ whiteSpace: "pre-wrap" }}>{e2.message}</pre>
       </main>
     );
@@ -93,14 +94,14 @@ export default async function UserPage({
   const { data: daily, error: e3 } = await supabaseAdmin
     .from("feature_daily")
     .select("day, time_sec")
-    .eq("email", decodedEmail)
+    .eq("email", email)
     .eq("location_id", location_id)
     .gte("day", toDay(since));
 
   if (e3) {
     return (
       <main style={pageShell()}>
-        <h1 style={{ fontSize: 28 }}>{decodedEmail}</h1>
+        <h1 style={{ fontSize: 28 }}>{email}</h1>
         <pre style={{ whiteSpace: "pre-wrap" }}>{e3.message}</pre>
       </main>
     );
@@ -132,7 +133,10 @@ export default async function UserPage({
   return (
     <main style={pageShell()}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <a href={`/users?location_id=${encodeURIComponent(location_id)}`} style={{ textDecoration: "none", fontWeight: 900, color: "inherit" }}>
+        <a
+          href={`/users?location_id=${encodeURIComponent(location_id)}`}
+          style={{ textDecoration: "none", fontWeight: 900, color: "inherit" }}
+        >
           ← Back
         </a>
 
@@ -155,7 +159,7 @@ export default async function UserPage({
       <div style={{ marginTop: 14, ...cardStyle() }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
-            <h1 style={{ fontSize: 26, margin: 0 }}>{decodedEmail}</h1>
+            <h1 style={{ fontSize: 26, margin: 0 }}>{email}</h1>
             <div style={{ opacity: 0.8, marginTop: 6 }}>
               Location: <b>{location_id}</b>
             </div>
@@ -190,9 +194,15 @@ export default async function UserPage({
 
         <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap", opacity: 0.9 }}>
           <span style={{ fontWeight: 900 }}>Components:</span>
-          <span>Login <b>{health?.components?.login_activity_score ?? "—"}</b></span>
-          <span>Adoption <b>{health?.components?.product_adoption_score ?? "—"}</b></span>
-          <span>Feedback <b>{health?.components?.feedback_score ?? "—"}</b></span>
+          <span>
+            Login <b>{health?.components?.login_activity_score ?? "—"}</b>
+          </span>
+          <span>
+            Adoption <b>{health?.components?.product_adoption_score ?? "—"}</b>
+          </span>
+          <span>
+            Feedback <b>{health?.components?.feedback_score ?? "—"}</b>
+          </span>
         </div>
       </div>
 
@@ -200,10 +210,18 @@ export default async function UserPage({
         <div style={cardStyle()}>
           <div style={{ fontWeight: 900, marginBottom: 10 }}>Risk drivers</div>
           <div style={{ display: "grid", gap: 8, opacity: 0.95 }}>
-            <div>• Activity drop: <b>{risk?.activity_drop ? "YES" : "no"}</b></div>
-            <div>• Low adoption: <b>{risk?.adoption_stagnation ? "YES" : "no"}</b></div>
-            <div>• Low engagement: <b>{risk?.engagement_weak ? "YES" : "no"}</b></div>
-            <div>• Feature abandon: <b>{abandoned.length ? abandoned.join(", ") : "no"}</b></div>
+            <div>
+              • Activity drop: <b>{risk?.activity_drop ? "YES" : "no"}</b>
+            </div>
+            <div>
+              • Low adoption: <b>{risk?.adoption_stagnation ? "YES" : "no"}</b>
+            </div>
+            <div>
+              • Low engagement: <b>{risk?.engagement_weak ? "YES" : "no"}</b>
+            </div>
+            <div>
+              • Feature abandon: <b>{abandoned.length ? abandoned.join(", ") : "no"}</b>
+            </div>
           </div>
         </div>
 
@@ -259,4 +277,4 @@ export default async function UserPage({
       </div>
     </main>
   );
-}}
+}  
