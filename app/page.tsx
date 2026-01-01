@@ -27,7 +27,7 @@ export default async function Home() {
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui" }}>
-      <h1>GoCroco — Events</h1>
+      <h1>GoCroco — Events 2</h1>
       <p>Derniers events trackés</p>
 
       {rows.length === 0 ? (
