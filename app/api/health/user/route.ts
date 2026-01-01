@@ -12,7 +12,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: false, error: "email and location_id required" }, { status: 400 });
   }
 
-  const { data, error } = await supabaseAdmin.rpc("gocroco_user_health", {
+  const { data, error } = await supabaseAdmin.rpc("gocroco_user_health_v2", {
     target_email: email,
     target_location_id: location_id,
     ref_day: day ?? null,

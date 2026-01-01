@@ -50,6 +50,7 @@ export default async function UserPage({
   const sp = await searchParams;
 
   const email = decodeURIComponent(p.email);
+  const emailMatch = email.trim();
   const location_id = sp.location_id;
 
   // --- ERROR STATE ---
@@ -78,15 +79,25 @@ export default async function UserPage({
   const { data: lastSeen } = await supabaseAdmin
     .from("user_last_seen")
     .select("last_seen_at, last_url")
-    .eq("email", email)
+    .ilike("email", emailMatch)
     .eq("location_id", location_id)
     .maybeSingle();
+
+  const { data: health } = await supabaseAdmin.rpc("gocroco_user_health_v2", {
+    target_email: emailMatch,
+    target_location_id: location_id,
+    ref_day: null,
+  });
+
+  const loginDays7 = Number(health?.login?.days7 || 0);
+  const loginDaysCapped = Math.min(5, loginDays7);
+  const loginPct = Math.round((loginDaysCapped / 5) * 100);
 
   // 2) lifetime features
   const { data: lifetime } = await supabaseAdmin
     .from("user_feature_lifetime")
     .select("feature_key, time_sec, last_seen_at")
-    .eq("email", email)
+    .ilike("email", emailMatch)
     .eq("location_id", location_id)
     .order("time_sec", { ascending: false })
     .limit(20);
@@ -95,17 +106,37 @@ export default async function UserPage({
     (acc, r) => acc + Number(r.time_sec || 0),
     0
   );
+  const topFeatures = (lifetime || []).slice(0, 5);
+  const featureTimeByKey = new Map<string, number>();
+  for (const r of lifetime || []) {
+    featureTimeByKey.set(r.feature_key, Number(r.time_sec || 0));
+  }
+  const ADOPTED_THRESHOLD_SEC = 420;
 
   // 3) sparkline 14 jours
   const since = new Date();
   since.setDate(since.getDate() - 13);
 
-  const { data: daily } = await supabaseAdmin
+  const { data: daily, error: dailyError } = await supabaseAdmin
     .from("feature_daily")
     .select("day, time_sec")
-    .eq("email", email)
+    .ilike("email", emailMatch)
     .eq("location_id", location_id)
     .gte("day", toDay(since));
+  
+  if (dailyError) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-black p-6 font-sans">
+        <div className="bg-zinc-900/40 border border-white/10 rounded-xl p-8 max-w-lg w-full text-center backdrop-blur-sm">
+          <h1 className="text-xl font-semibold text-white mb-3">Activity History Error</h1>
+          <p className="text-sm text-zinc-400 mb-4">The daily activity query failed.</p>
+          <pre className="text-left text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-3 overflow-auto">
+            {dailyError.message}
+          </pre>
+        </div>
+      </main>
+    );
+  }
 
   const dayMap = new Map<string, number>();
   for (const r of daily || []) {
@@ -162,6 +193,13 @@ export default async function UserPage({
                 <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1">Total Lifetime</div>
                 <div className="text-zinc-200 font-medium font-mono">{fmtSec(totalLifetime)}</div>
               </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1">Login Activity</div>
+                <div className="text-zinc-200 font-medium font-mono">{loginDaysCapped}/5</div>
+                <div className="h-1.5 w-28 bg-white/10 rounded-full overflow-hidden mt-2">
+                  <div className="h-full bg-emerald-400" style={{ width: `${loginPct}%` }} />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -181,7 +219,7 @@ export default async function UserPage({
             <Card className="min-h-[300px] flex flex-col">
               <SectionHeader title="Activity History" subtitle="Last 14 Days" />
               
-              <div className="flex-1 flex items-end gap-1.5 pt-6 w-full">
+              <div className="flex items-end gap-1.5 pt-6 w-full h-48 md:h-56">
                 {series.map((p) => {
                   const heightPct = Math.max(4, Math.round((p.sec / max) * 100));
                   return (
@@ -215,7 +253,7 @@ export default async function UserPage({
               <SectionHeader title="Top Features" subtitle="Lifetime Usage" />
 
               <div className="space-y-2">
-                {(lifetime || []).map((f) => (
+                {topFeatures.map((f) => (
                   <div
                     key={f.feature_key}
                     className="flex items-center justify-between p-2.5 rounded-lg border border-white/5 bg-white/[0.02] hover:bg-white/5 transition-colors group"
@@ -234,11 +272,35 @@ export default async function UserPage({
                   </div>
                 ))}
 
-                {(lifetime || []).length === 0 && (
+                {topFeatures.length === 0 && (
                   <div className="text-sm text-zinc-600 italic py-2 text-center">
                     No feature usage data found.
                   </div>
                 )}
+              </div>
+            </Card>
+
+            <Card>
+              <SectionHeader title="All Features" subtitle="Adoption" />
+              <div className="space-y-2">
+                {FEATURES.map((f) => {
+                  const used = featureTimeByKey.get(f.key) || 0;
+                  const adopted = used >= ADOPTED_THRESHOLD_SEC;
+                  return (
+                    <div
+                      key={f.key}
+                      className="flex items-center justify-between p-2.5 rounded-lg border border-white/5 bg-white/[0.02]"
+                    >
+                      <label className="flex items-center gap-2 text-sm text-zinc-300">
+                        <input type="checkbox" checked={adopted} readOnly />
+                        <span className="truncate">{f.label}</span>
+                      </label>
+                      <span className="text-[10px] text-zinc-500">
+                        {adopted ? "Adopted" : "Not adopted"}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </Card>
           </div>

@@ -15,4 +15,5 @@ export const FEATURES = [
   { key: "funnels-websites", label: "Funnels Websites" },
   { key: "form-builder", label: "Form Builder" },
   { key: "survey-builder", label: "Survey Builder" },
+  { key: "other", label: "Other" },
 ];

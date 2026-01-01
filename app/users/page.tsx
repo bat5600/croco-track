@@ -1,8 +1,10 @@
+import "server-only";
 export const dynamic = "force-dynamic";
 
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { fmtSec, healthColor, trendIcon, riskTags, cardStyle, pageShell } from "@/lib/ui";
+import { fmtSec, healthColor, trendIcon, riskTags } from "@/lib/ui";
 
+// --- Types ---
 type LastSeenRow = {
   email: string;
   location_id: string;
@@ -10,47 +12,98 @@ type LastSeenRow = {
   last_url: string | null;
 };
 
-export default async function UsersPage({ searchParams }: { searchParams?: any }) {
-  const sp = searchParams || {};
-  const location_id = sp.location_id || sp.location || ""; // rétrocompat si tu veux
+type ViewRow = LastSeenRow & {
+  total_sec: number;
+  health_score: number | null;
+  health_status: string;
+  health_color: string | undefined;
+  trend: string | undefined;
+  risk_tags: string[];
+  login_days_capped: number;
+  login_pct: number;
+};
+
+// --- Components ---
+
+const SearchInput = (props: React.InputHTMLAttributes<HTMLInputElement>) => (
+  <div className="relative group flex-1 min-w-[200px]">
+    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+      <svg className="w-4 h-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+    </div>
+    <input
+      {...props}
+      className="h-10 pl-9 pr-4 bg-zinc-900/50 border border-white/10 rounded-lg text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-white/20 focus:ring-1 focus:ring-white/5 w-full transition-all hover:bg-zinc-900/80"
+    />
+  </div>
+);
+
+const Select = (props: React.SelectHTMLAttributes<HTMLSelectElement>) => (
+  <div className="relative min-w-[160px]">
+    <select
+      {...props}
+      className="h-10 pl-3 pr-8 bg-zinc-900/50 border border-white/10 rounded-lg text-sm text-zinc-300 focus:outline-none focus:border-white/20 appearance-none w-full transition-all cursor-pointer hover:bg-zinc-900/80"
+    />
+    <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+      <svg className="w-4 h-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+    </div>
+  </div>
+);
+
+export default async function UsersPage({ searchParams }: { searchParams?: Promise<any> }) {
+  const sp = await searchParams || {};
+  const location_id = sp.location_id || sp.location || "";
+  const q = String(sp.q || "").trim().toLowerCase();
+  const healthFilter = String(sp.health || "").trim().toLowerCase();
+  const sort = String(sp.sort || "last_seen");
   const limit = Math.min(Number(sp.limit || 200), 500);
 
   // 1) last seen
-  const { data: lastSeen, error: e1 } = await supabaseAdmin
+  let query = supabaseAdmin
     .from("user_last_seen")
     .select("email, location_id, last_seen_at, last_url")
     .order("last_seen_at", { ascending: false })
     .limit(limit);
 
+  if (location_id) {
+    query = query.eq("location_id", location_id);
+  }
+
+  const { data: lastSeen, error: e1 } = await query;
+
   if (e1) {
     return (
-      <main style={pageShell()}>
-        <h1 style={{ fontSize: 28, marginBottom: 8 }}>Users</h1>
-        <pre style={{ whiteSpace: "pre-wrap" }}>{e1.message}</pre>
+      <main className="min-h-screen bg-black text-white p-10 flex items-center justify-center">
+        <div className="bg-red-950/20 border border-red-900/50 p-6 rounded-xl max-w-lg backdrop-blur-sm">
+           <h1 className="text-xl font-bold text-red-400 mb-2">Error loading users</h1>
+           <pre className="text-xs text-red-300/70 whitespace-pre-wrap font-mono">{e1.message}</pre>
+        </div>
       </main>
     );
   }
 
-  const rows = (lastSeen || []) as LastSeenRow[];
+  let rows = (lastSeen || []) as LastSeenRow[];
 
-  // Si tu veux “filtrer par location”, on le fait proprement :
-  const filtered = location_id ? rows.filter(r => r.location_id === location_id) : rows;
+  // Filter in memory for search query (email)
+  if (q) {
+    rows = rows.filter(r => r.email.toLowerCase().includes(q));
+  }
 
-  // 2) lifetime totals pour les couples (email, location)
-  const emails = Array.from(new Set(filtered.map(r => r.email)));
-  const locations = Array.from(new Set(filtered.map(r => r.location_id)));
+  // 2) lifetime totals
+  const emails = Array.from(new Set(rows.map(r => r.email)));
+  const locations = Array.from(new Set(rows.map(r => r.location_id)));
 
   const { data: lifetime, error: e2 } = await supabaseAdmin
     .from("user_feature_lifetime")
     .select("email, location_id, time_sec")
-    .in("email", emails)
-    .in("location_id", locations);
+    .in("email", emails.length ? emails : ["__none__"])
+    .in("location_id", locations.length ? locations : ["__none__"]);
 
   if (e2) {
     return (
-      <main style={pageShell()}>
-        <h1 style={{ fontSize: 28, marginBottom: 8 }}>Users</h1>
-        <pre style={{ whiteSpace: "pre-wrap" }}>{e2.message}</pre>
+      <main className="min-h-screen bg-black text-white p-10 flex items-center justify-center">
+         <div className="bg-red-950/20 border border-red-900/50 p-6 rounded-xl max-w-lg">
+           <pre className="text-red-300">{e2.message}</pre>
+        </div>
       </main>
     );
   }
@@ -61,9 +114,9 @@ export default async function UsersPage({ searchParams }: { searchParams?: any }
     totals.set(k, (totals.get(k) || 0) + Number(r.time_sec || 0));
   }
 
-  // 3) Health + Risk (V1: on enrichit les 60 premiers pour éviter les tempêtes)
+  // 3) Health + Risk (First N)
   const ENRICH_LIMIT = 60;
-  const toEnrich = filtered.slice(0, ENRICH_LIMIT);
+  const toEnrich = rows.slice(0, ENRICH_LIMIT);
 
   const healthMap = new Map<string, any>();
   const riskMap = new Map<string, any>();
@@ -71,9 +124,8 @@ export default async function UsersPage({ searchParams }: { searchParams?: any }
   await Promise.all(
     toEnrich.map(async (u) => {
       const key = `${u.email}|${u.location_id}`;
-
       const [{ data: health }, { data: risk }] = await Promise.all([
-        supabaseAdmin.rpc("gocroco_user_health", {
+        supabaseAdmin.rpc("gocroco_user_health_v2", {
           target_email: u.email,
           target_location_id: u.location_id,
           ref_day: null,
@@ -84,128 +136,263 @@ export default async function UsersPage({ searchParams }: { searchParams?: any }
           ref_day: null,
         }),
       ]);
-
       healthMap.set(key, health);
       riskMap.set(key, risk);
     })
   );
 
+  // 4) Prepare View Data (Merge, Filter, Sort)
+  const viewRows: ViewRow[] = rows.map((u) => {
+    const key = `${u.email}|${u.location_id}`;
+    const total = totals.get(key) || 0;
+    const health = healthMap.get(key);
+    const risk = riskMap.get(key);
+
+    const score = health?.health_score;
+    const status = String(health?.status || "Unknown");
+    const days7 = Number(health?.login?.days7 || 0);
+    const loginDaysCapped = Math.min(5, days7);
+    
+    return {
+      ...u,
+      total_sec: total,
+      health_score: typeof score === "number" ? Math.round(score) : null,
+      health_status: status,
+      health_color: health?.color,
+      trend: health?.trend?.indicator,
+      risk_tags: riskTags(risk).slice(0, 2),
+      login_days_capped: loginDaysCapped,
+      login_pct: Math.round((loginDaysCapped / 5) * 100),
+    };
+  });
+
+  // Filter
+  const filtered = viewRows.filter((r) => {
+    if (healthFilter && r.health_status.toLowerCase() !== healthFilter) return false;
+    return true;
+  });
+
+  // Sort
+  const sorted = filtered.sort((a, b) => {
+    if (sort === "health") return (b.health_score ?? -999) - (a.health_score ?? -999);
+    if (sort === "lifetime") return b.total_sec - a.total_sec;
+    // Default: last_seen
+    const ta = a.last_seen_at ? new Date(a.last_seen_at).getTime() : 0;
+    const tb = b.last_seen_at ? new Date(b.last_seen_at).getTime() : 0;
+    return tb - ta;
+  });
+
+  // --- RENDER ---
+
   return (
-    <main style={pageShell()}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <div>
-          <h1 style={{ fontSize: 28, marginBottom: 6 }}>Users</h1>
-          <div style={{ opacity: 0.75 }}>
-            {location_id ? (
-              <>Filtered location: <b>{location_id}</b></>
-            ) : (
-              <>All locations (add <code>?location_id=...</code> to filter)</>
-            )}
+    <main className="min-h-screen bg-black text-zinc-400 font-sans p-6 md:p-10 selection:bg-zinc-800">
+      <div className="max-w-[1600px] mx-auto space-y-8">
+        
+        {/* HEADER */}
+        <header className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-white/5 pb-8">
+          <div>
+            <h1 className="text-3xl font-bold text-white tracking-tight mb-2">Users</h1>
+            <div className="flex items-center gap-2 text-sm text-zinc-500">
+               {location_id ? (
+                 <>
+                   <span>Filtering by location:</span>
+                   <span className="bg-white/5 px-2 py-0.5 rounded text-zinc-300 font-mono border border-white/5">{location_id}</span>
+                 </>
+               ) : (
+                 <span>All locations</span>
+               )}
+               <span className="text-zinc-700">•</span>
+               <span>Enriched health for top <b className="text-zinc-300">{ENRICH_LIMIT}</b></span>
+            </div>
+          </div>
+          
+          {location_id && (
+            <a
+              href={`/locations/${encodeURIComponent(location_id)}`}
+              className="h-10 px-4 inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold text-zinc-900 bg-white hover:bg-zinc-200 transition-colors shadow-[0_0_15px_rgba(255,255,255,0.1)]"
+            >
+              View Location Dashboard →
+            </a>
+          )}
+        </header>
+
+        {/* TOOLBAR */}
+        <form className="flex flex-col lg:flex-row items-center gap-4 bg-zinc-900/20 p-2 rounded-xl border border-white/5 backdrop-blur-sm">
+           {/* Preserve location_id in search params if present */}
+           {location_id && <input type="hidden" name="location_id" value={location_id} />}
+           
+           <SearchInput name="q" defaultValue={q} placeholder="Search users by email..." />
+           
+           <div className="flex gap-3 w-full lg:w-auto overflow-x-auto pb-1 lg:pb-0">
+             <Select name="health" defaultValue={healthFilter}>
+                <option value="">All Health Status</option>
+                <option value="thriving">Thriving</option>
+                <option value="healthy">Healthy</option>
+                <option value="steady">Steady</option>
+                <option value="at-risk">At-risk</option>
+                <option value="unknown">Unknown</option>
+             </Select>
+
+             <Select name="sort" defaultValue={sort}>
+                <option value="last_seen">Sort by Last Seen</option>
+                <option value="health">Sort by Health Score</option>
+                <option value="lifetime">Sort by Lifetime</option>
+             </Select>
+           </div>
+
+           <div className="flex items-center gap-3 w-full lg:w-auto justify-end ml-auto pl-2 border-t lg:border-t-0 border-white/5 pt-3 lg:pt-0">
+              <button
+                type="submit"
+                className="h-10 px-6 rounded-lg bg-white text-black text-sm font-semibold hover:bg-zinc-200 transition-colors shadow-[0_0_15px_rgba(255,255,255,0.1)] whitespace-nowrap"
+              >
+                Apply
+              </button>
+              <a
+                href={location_id ? `/users?location_id=${encodeURIComponent(location_id)}` : "/users"}
+                className="h-10 px-4 inline-flex items-center justify-center rounded-lg text-sm font-medium text-zinc-400 hover:text-white hover:bg-white/5 transition-colors border border-transparent hover:border-white/10"
+              >
+                Reset
+              </a>
+           </div>
+        </form>
+
+        {/* TABLE */}
+        <div className="bg-zinc-900/40 border border-white/5 rounded-xl overflow-hidden backdrop-blur-sm shadow-xl shadow-black/20">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[1000px]">
+              <thead>
+                <tr className="border-b border-white/5 bg-white/[0.02]">
+                  <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-1/4">User / Location</th>
+                  <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-40">Health Status</th>
+                  <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-40">Last Seen</th>
+                  <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-48">Login Activity (7d)</th>
+                  <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-32">Lifetime</th>
+                  <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Risk Factors</th>
+                  <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider text-right w-24">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {sorted.map((u) => {
+                  const key = `${u.email}|${u.location_id}`;
+                  const isEnriched = u.health_score !== null;
+                  const badge = healthColor(u.health_color);
+
+                  return (
+                    <tr key={key} className="group hover:bg-white/[0.02] transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="flex flex-col max-w-[280px]">
+                          <a 
+                             href={`/users/${encodeURIComponent(u.email)}?location_id=${encodeURIComponent(u.location_id)}`}
+                             className="text-sm font-bold text-zinc-200 truncate hover:text-white transition-colors"
+                          >
+                            {u.email}
+                          </a>
+                          <div className="flex items-center gap-1.5 mt-1">
+                             <span className="text-xs text-zinc-500">at</span>
+                             <a 
+                               href={`/locations/${encodeURIComponent(u.location_id)}`}
+                               className="text-xs font-mono text-zinc-400 bg-white/5 px-1.5 py-0.5 rounded border border-white/5 hover:border-white/20 transition-colors"
+                             >
+                               {u.location_id}
+                             </a>
+                          </div>
+                        </div>
+                      </td>
+
+                      <td className="px-6 py-4">
+                        {isEnriched ? (
+                           <div className="flex flex-col gap-1.5 items-start">
+                              <span 
+                                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold border shadow-sm backdrop-blur-sm"
+                                style={{
+                                    backgroundColor: badge.bg || "rgba(255,255,255,0.05)",
+                                    color: badge.fg || "#fff",
+                                    borderColor: badge.bg ? "transparent" : "rgba(255,255,255,0.1)",
+                                }}
+                              >
+                                 <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: badge.fg, boxShadow: `0 0 6px ${badge.fg}40` }} />
+                                 {u.health_score} • {u.health_status}
+                                 {u.trend && <span className="opacity-80 ml-0.5">{trendIcon(u.trend)}</span>}
+                              </span>
+                           </div>
+                        ) : (
+                           <span className="text-[10px] text-zinc-600 font-mono italic">Waiting for data...</span>
+                        )}
+                      </td>
+
+                      <td className="px-6 py-4">
+                        <div className="text-sm text-zinc-400 font-medium">
+                           {u.last_seen_at ? new Date(u.last_seen_at).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : "—"}
+                        </div>
+                        <div className="text-xs text-zinc-600 mt-0.5 font-mono truncate max-w-[140px]" title={u.last_url || ""}>
+                           {u.last_url ? u.last_url.replace(/^https?:\/\//, '') : "—"}
+                        </div>
+                      </td>
+
+                      <td className="px-6 py-4">
+                         <div className="flex flex-col gap-2">
+                             <div className="flex justify-between items-baseline text-xs max-w-[120px]">
+                                 <span className="font-semibold text-zinc-300">{u.login_days_capped}<span className="text-zinc-600 font-normal">/5 days</span></span>
+                             </div>
+                             <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden w-full max-w-[120px]">
+                                <div 
+                                  style={{ width: `${u.login_pct}%` }} 
+                                  className="h-full bg-emerald-500 rounded-full opacity-80 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
+                                />
+                             </div>
+                         </div>
+                      </td>
+
+                      <td className="px-6 py-4">
+                         <span className="text-sm font-mono text-zinc-300 font-medium">{fmtSec(u.total_sec)}</span>
+                      </td>
+
+                      <td className="px-6 py-4">
+                        <div className="flex flex-wrap gap-1.5">
+                           {u.risk_tags.length > 0 ? (
+                             u.risk_tags.map((t: string) => (
+                               <span 
+                                 key={t} 
+                                 className="px-1.5 py-0.5 rounded border border-zinc-800 bg-zinc-900/50 text-[10px] text-zinc-400 font-medium whitespace-nowrap"
+                               >
+                                 {t}
+                               </span>
+                             ))
+                           ) : (
+                             <span className="text-zinc-700 text-xs">—</span>
+                           )}
+                        </div>
+                      </td>
+
+                      <td className="px-6 py-4 text-right">
+                         <a
+                            href={`/users/${encodeURIComponent(u.email)}?location_id=${encodeURIComponent(u.location_id)}`}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-white/5 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-white/10 hover:border-white/20 transition-all"
+                          >
+                            Open
+                          </a>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {sorted.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-12 text-center text-zinc-500 italic">
+                       No users found matching current filters.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
 
-        {location_id && (
-          <a
-            href={`/locations/${encodeURIComponent(location_id)}`}
-            style={{
-              alignSelf: "center",
-              textDecoration: "none",
-              fontWeight: 800,
-              padding: "10px 14px",
-              borderRadius: 12,
-              border: "1px solid #e5e7eb",
-              background: "white",
-              color: "inherit",
-            }}
-          >
-            View location dashboard →
-          </a>
-        )}
-      </div>
+        <div className="flex flex-col sm:flex-row justify-between items-center text-xs text-zinc-600 px-2 pb-10 gap-2">
+           <div>Showing {sorted.length} users</div>
+           <div>Sorted by <span className="text-zinc-400 font-medium">{sort}</span></div>
+        </div>
 
-      <div style={{ marginTop: 16, display: "grid", gap: 12 }}>
-        {filtered.map((u) => {
-          const key = `${u.email}|${u.location_id}`;
-          const total = totals.get(key) || 0;
-
-          const health = healthMap.get(key);
-          const risk = riskMap.get(key);
-
-          const score = health?.health_score;
-          const status = health?.status;
-          const trend = health?.trend?.indicator;
-          const badge = healthColor(health?.color);
-          const tags = riskTags(risk).slice(0, 2);
-
-          return (
-            <a
-              key={key}
-              href={`/users/${encodeURIComponent(u.email)}?location_id=${encodeURIComponent(u.location_id)}`}
-              style={{ ...cardStyle(), display: "block", textDecoration: "none", color: "inherit" }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ fontWeight: 900, fontSize: 15 }}>{u.email}</div>
-
-                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                  {typeof score === "number" ? (
-                    <span
-                      style={{
-                        padding: "5px 10px",
-                        borderRadius: 999,
-                        background: badge.bg,
-                        color: badge.fg,
-                        fontWeight: 900,
-                        fontSize: 12,
-                      }}
-                    >
-                      {Math.round(score)} • {status} • {trendIcon(trend)}
-                    </span>
-                  ) : (
-                    <span style={{ opacity: 0.6, fontWeight: 800, fontSize: 12 }}>
-                      Health: loading… (enriched only first {ENRICH_LIMIT})
-                    </span>
-                  )}
-
-                  <span style={{ opacity: 0.7, fontWeight: 700 }}>
-                    {u.last_seen_at ? new Date(u.last_seen_at).toLocaleString() : "—"}
-                  </span>
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: 14, marginTop: 10, flexWrap: "wrap", opacity: 0.85 }}>
-                <span>
-                  Location: <b>{u.location_id}</b>
-                </span>
-                <span>
-                  Lifetime: <b>{fmtSec(total)}</b>
-                </span>
-              </div>
-
-              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                {tags.length > 0 && tags.map((t: string) => (
-                  <span
-                    key={t}
-                    style={{
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 999,
-                      padding: "3px 10px",
-                      fontSize: 12,
-                      background: "white",
-                      opacity: 0.95,
-                      fontWeight: 700,
-                    }}
-                  >
-                    {t}
-                  </span>
-                ))}
-
-                <span style={{ opacity: 0.7, fontSize: 12, wordBreak: "break-all" }}>
-                  Last URL: {u.last_url || "—"}
-                </span>
-              </div>
-            </a>
-          );
-        })}
       </div>
     </main>
   );

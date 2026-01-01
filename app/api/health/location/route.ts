@@ -16,7 +16,7 @@ export async function GET(req: Request) {
     }
 
     const { data, error } = await supabaseAdmin.rpc(
-      "gocroco_location_health",
+      "gocroco_location_health_v2",
       {
         target_location_id: location_id,
         ref_day: day ?? null,

@@ -148,17 +148,19 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
   // --- DATA FETCHING ---
   
   // 0) Health
-  const { data: health } = await supabaseAdmin.rpc("gocroco_location_health", {
+  const { data: health } = await supabaseAdmin.rpc("gocroco_location_health_v2", {
     target_location_id: location_id,
     ref_day: null,
   });
-
   const badge = healthColor(health?.color);
   const score = typeof health?.health_score === "number" ? Math.round(health.health_score) : null;
   const status = health?.status ?? "—";
   const trend = health?.trend?.indicator;
+  const loginScore = typeof health?.components?.login_activity_score === "number"
+    ? Math.round(health.components.login_activity_score)
+    : null;
 
-  // A) Top features
+  // A) Top features (location lifetime)
   const { data: lifetimeRows, error: e1 } = await supabaseAdmin
     .from("user_feature_lifetime")
     .select("feature_key, time_sec")
@@ -174,9 +176,14 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
   const topFeatures = Array.from(featureTotals.entries())
     .map(([feature_key, time_sec]) => ({ feature_key, time_sec }))
     .sort((a, b) => b.time_sec - a.time_sec)
-    .slice(0, 8);
+    .slice(0, 5);
 
   const totalLifetime = Array.from(featureTotals.values()).reduce((a, b) => a + b, 0);
+  const featureTimeByKey = new Map<string, number>();
+  for (const r of lifetimeRows || []) {
+    featureTimeByKey.set(r.feature_key, Number(r.time_sec || 0));
+  }
+  const ADOPTED_THRESHOLD_SEC = 3600;
 
   // B) Users list
   const { data: usersSeen, error: e2 } = await supabaseAdmin
@@ -206,14 +213,14 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
   }
 
   // C) Sparkline
-  const since = new Date();
-  since.setDate(since.getDate() - 13);
+  const since14 = new Date();
+  since14.setDate(since14.getDate() - 13);
 
   const { data: dailyRows, error: e4 } = await supabaseAdmin
     .from("feature_daily")
     .select("day, time_sec")
     .eq("location_id", location_id)
-    .gte("day", toDay(since));
+    .gte("day", toDay(since14));
 
   if (e4) return <ErrorState msg={e4.message} id={location_id} />;
 
@@ -225,8 +232,8 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
 
   const series: { day: string; sec: number }[] = [];
   for (let i = 0; i < 14; i++) {
-    const d = new Date(since);
-    d.setDate(since.getDate() + i);
+    const d = new Date(since14);
+    d.setDate(since14.getDate() + i);
     const k = toDay(d);
     series.push({ day: k, sec: dayMap.get(k) || 0 });
   }
@@ -298,7 +305,7 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
                    </div>
                 </div>
                 <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
-                   <MetricMini label="Login" value={health?.components?.login_activity_score} />
+                   <MetricMini label="Login" value={loginScore} />
                    <MetricMini label="Adoption" value={health?.components?.product_adoption_score} />
                    <MetricMini label="Feedback" value={health?.components?.feedback_score} />
                 </div>
@@ -439,6 +446,40 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
                     </span>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            {/* All Features (Adoption) */}
+            <div style={S.card}>
+              <SectionHeader title="All Features" subtitle="Adoption" />
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                {FEATURES.map((f) => {
+                  const used = featureTimeByKey.get(f.key) || 0;
+                  const adopted = used >= ADOPTED_THRESHOLD_SEC;
+                  return (
+                    <div
+                      key={f.key}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "12px",
+                        padding: "8px 10px",
+                        borderRadius: "8px",
+                        border: `1px solid ${THEME.border}`,
+                        background: "rgba(255,255,255,0.02)",
+                      }}
+                    >
+                      <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <input type="checkbox" checked={adopted} readOnly />
+                        <span style={{ fontSize: "13px", color: THEME.textMain }}>{f.label}</span>
+                      </label>
+                      <span style={{ fontSize: "11px", color: THEME.textMuted }}>
+                        {adopted ? "Adopted" : "Not adopted"}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
