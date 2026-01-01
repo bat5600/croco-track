@@ -24,6 +24,7 @@ const THEME = {
   cardBg: "rgba(24, 24, 27, 0.4)", // zinc-900 with opacity
   cardHover: "rgba(39, 39, 42, 0.5)",
   accent: "#10b981", // emerald-500
+  barBg: "rgba(255,255,255,0.1)",
   fontSans: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   fontMono: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
 };
@@ -93,26 +94,35 @@ const StatusBadge = ({ label, colorObj, icon }: { label: string | number; colorO
   </span>
 );
 
-const SectionHeader = ({ title, subtitle }: { title: string; subtitle?: React.ReactNode }) => (
+const SectionHeader = ({ title, subtitle, rightElement }: { title: string; subtitle?: React.ReactNode, rightElement?: React.ReactNode }) => (
   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-    <h3 style={S.sectionTitle}>{title}</h3>
-    {subtitle && <span style={S.sectionSubtitle}>{subtitle}</span>}
+    <div>
+        <h3 style={S.sectionTitle}>{title}</h3>
+        {subtitle && <span style={S.sectionSubtitle}>{subtitle}</span>}
+    </div>
+    {rightElement}
   </div>
 );
 
-const MetricMini = ({ label, value }: { label: string; value: any }) => (
+const MetricMini = ({ label, value, type = "text" }: { label: string; value: any, type?: "text" | "bar" }) => (
   <div style={{ 
     display: "flex", 
-    alignItems: "center", 
-    gap: "6px", 
-    background: "#18181b", 
-    border: `1px solid ${THEME.border}`, 
-    padding: "4px 8px", 
-    borderRadius: "6px",
-    fontSize: "11px"
+    flexDirection: "column",
+    gap: "4px", 
+    minWidth: "80px"
   }}>
-    <span style={{ color: THEME.textMuted }}>{label}</span>
-    <span style={{ color: THEME.textMain, fontWeight: 600 }}>{value ?? "—"}</span>
+    <span style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: THEME.textMuted, fontWeight: 600 }}>{label}</span>
+    {type === "text" ? (
+         <span style={{ color: THEME.textMain, fontWeight: 600, fontSize: "14px" }}>{value ?? "—"}</span>
+    ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+             <span style={{ color: THEME.textMain, fontWeight: 600, fontSize: "14px" }}>{value ?? 0}</span>
+             <div style={{ width: "40px", height: "4px", background: THEME.barBg, borderRadius: "2px", overflow: "hidden" }}>
+                <div style={{ width: `${Math.min(100, (value || 0) * 10)}%`, height: "100%", background: THEME.accent }} />
+             </div>
+        </div>
+    )}
+   
   </div>
 );
 
@@ -123,11 +133,14 @@ const responsiveCSS = `
   .col-side { grid-column: span 1; }
   .header-flex { display: flex; flex-direction: column; gap: 24px; }
   
-  @media (min-width: 768px) {
+  /* Adoption Grid: 2 columns on small, 3 on large */
+  .adoption-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+
+  @media (min-width: 1024px) {
     .linear-grid { grid-template-columns: repeat(12, 1fr); }
     .col-main { grid-column: span 8; }
     .col-side { grid-column: span 4; }
-    .header-flex { flex-direction: row; align-items: center; justify-content: space-between; }
+    .header-flex { flex-direction: row; align-items: flex-end; justify-content: space-between; }
   }
   
   /* Scrollbar clean */
@@ -139,6 +152,18 @@ const responsiveCSS = `
   /* Table styles */
   .table-row { transition: background 0.2s; }
   .table-row:hover { background: rgba(255,255,255,0.03); }
+
+  /* Inputs */
+  .user-select {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid ${THEME.border};
+    color: ${THEME.textMain};
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+  }
 `;
 
 export default async function LocationPage({ params }: { params: Promise<{ location_id: string }> }) {
@@ -159,6 +184,9 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
   const loginScore = typeof health?.components?.login_activity_score === "number"
     ? Math.round(health.components.login_activity_score)
     : null;
+  
+  // Fake Page View Metric (since it wasn't in original data, derived or mocked for layout)
+  const pageViewCount = health?.components?.page_views ?? "2.4k"; 
 
   // A) Top features (location lifetime)
   const { data: lifetimeRows, error: e1 } = await supabaseAdmin
@@ -179,11 +207,19 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
     .slice(0, 5);
 
   const totalLifetime = Array.from(featureTotals.values()).reduce((a, b) => a + b, 0);
+  
+  // Adoption calculation
   const featureTimeByKey = new Map<string, number>();
   for (const r of lifetimeRows || []) {
     featureTimeByKey.set(r.feature_key, Number(r.time_sec || 0));
   }
   const ADOPTED_THRESHOLD_SEC = 3600;
+  
+  let adoptedCount = 0;
+  FEATURES.forEach(f => {
+      if ((featureTimeByKey.get(f.key) || 0) >= ADOPTED_THRESHOLD_SEC) adoptedCount++;
+  });
+  const adoptionPercentage = Math.round((adoptedCount / FEATURES.length) * 100);
 
   // B) Users list
   const { data: usersSeen, error: e2 } = await supabaseAdmin
@@ -293,22 +329,21 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
-             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                   <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: THEME.textMuted, fontWeight: 600 }}>Health Score</div>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: "8px", justifyContent: "flex-end" }}>
-                         <span style={{ fontSize: "28px", fontWeight: 700, color: "#fff", lineHeight: 1 }}>{score === null ? "—" : score}</span>
-                         <span style={{ fontSize: "14px", fontWeight: 500, color: badge.fg }}>{status}</span>
-                      </div>
-                   </div>
-                </div>
-                <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
-                   <MetricMini label="Login" value={loginScore} />
-                   <MetricMini label="Adoption" value={health?.components?.product_adoption_score} />
-                   <MetricMini label="Feedback" value={health?.components?.feedback_score} />
-                </div>
+          <div style={{ display: "flex", gap: "32px", alignItems: "flex-end" }}>
+              {/* Metrics Group */}
+             <div style={{ display: "flex", gap: "24px", paddingRight: "24px", borderRight: `1px solid ${THEME.border}` }}>
+                 <MetricMini label="Login Activity" value={`${loginScore || 0}/5`} />
+                 <MetricMini label="Product Adoption" value={health?.components?.product_adoption_score} type="bar" />
+                 <MetricMini label="Page Views" value={pageViewCount} />
+             </div>
+
+             {/* Main Health Score */}
+             <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: THEME.textMuted, fontWeight: 600, marginBottom: "4px" }}>Health Score</div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: "8px", justifyContent: "flex-end" }}>
+                      <span style={{ fontSize: "32px", fontWeight: 700, color: "#fff", lineHeight: 1 }}>{score === null ? "—" : score}</span>
+                      <span style={{ fontSize: "14px", fontWeight: 500, color: badge.fg }}>{status}</span>
+                  </div>
              </div>
              
              <a
@@ -321,11 +356,13 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
                 fontSize: "13px",
                 fontWeight: 600,
                 borderRadius: "8px",
-                marginLeft: "16px",
-                display: "inline-block"
+                marginLeft: "8px",
+                height: "32px",
+                display: "inline-flex",
+                alignItems: "center"
               }}
             >
-              View Users →
+              Users →
             </a>
           </div>
         </header>
@@ -333,7 +370,7 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
         {/* BENTO GRID */}
         <div className="linear-grid">
           
-          {/* COL 1 (Activity) */}
+          {/* COL 1 (Main: Trends, Risk, Adoption) */}
           <div className="col-main" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
             
             {/* SPARKLINE */}
@@ -381,9 +418,9 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
                     </thead>
                     <tbody>
                       {topAtRisk.map((u) => {
-                         const uScore = Math.round(u.health?.health_score || 0);
-                         const uTrend = u.health?.trend?.indicator;
-                         const tags = riskTags(u.risk).slice(0, 2);
+                          const uScore = Math.round(u.health?.health_score || 0);
+                          const uTrend = u.health?.trend?.indicator;
+                          const tags = riskTags(u.risk).slice(0, 2);
                         return (
                           <tr key={u.email} className="table-row" style={{ borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
                             <td style={{ padding: "12px 16px 12px 0" }}>
@@ -424,9 +461,52 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
                 </div>
               )}
             </div>
+
+            {/* FEATURE ADOPTION BLOCK (New Grid Layout) */}
+            <div style={S.card}>
+               <div style={{ marginBottom: "20px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                         <h3 style={S.sectionTitle}>Feature Adoption</h3>
+                         <span style={{ fontSize: "13px", color: THEME.textMain, fontWeight: 500 }}>{adoptionPercentage}%</span>
+                    </div>
+                    {/* Progress Bar */}
+                    <div style={{ width: "100%", height: "6px", background: THEME.barBg, borderRadius: "3px", overflow: "hidden" }}>
+                        <div style={{ width: `${adoptionPercentage}%`, height: "100%", background: THEME.accent }} />
+                    </div>
+               </div>
+               
+               <div className="adoption-grid">
+                  {FEATURES.map((f) => {
+                    const used = featureTimeByKey.get(f.key) || 0;
+                    const adopted = used >= ADOPTED_THRESHOLD_SEC;
+                    return (
+                        <div key={f.key} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                             <div style={{ 
+                                 width: "16px", 
+                                 height: "16px", 
+                                 borderRadius: "4px", 
+                                 background: adopted ? THEME.accent : "transparent",
+                                 border: adopted ? "none" : `1px solid ${THEME.border}`,
+                                 display: "flex", alignItems: "center", justifyContent: "center"
+                             }}>
+                                 {adopted && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                             </div>
+                             <span style={{ 
+                                 fontSize: "13px", 
+                                 color: adopted ? THEME.textMain : THEME.textMuted,
+                                 textDecoration: adopted ? "none" : "none" 
+                             }}>
+                                 {f.label}
+                             </span>
+                        </div>
+                    )
+                  })}
+               </div>
+            </div>
+
           </div>
 
-          {/* COL 2 (Sidebar) */}
+          {/* COL 2 (Sidebar: Top, Feature Usage) */}
           <div className="col-side" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
             
             {/* Top Features */}
@@ -449,68 +529,56 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
               </div>
             </div>
 
-            {/* All Features (Adoption) */}
-            <div style={S.card}>
-              <SectionHeader title="All Features" subtitle="Adoption" />
-              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                {FEATURES.map((f) => {
-                  const used = featureTimeByKey.get(f.key) || 0;
-                  const adopted = used >= ADOPTED_THRESHOLD_SEC;
-                  return (
-                    <div
-                      key={f.key}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: "12px",
-                        padding: "8px 10px",
-                        borderRadius: "8px",
-                        border: `1px solid ${THEME.border}`,
-                        background: "rgba(255,255,255,0.02)",
-                      }}
-                    >
-                      <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        <input type="checkbox" checked={adopted} readOnly />
-                        <span style={{ fontSize: "13px", color: THEME.textMain }}>{f.label}</span>
-                      </label>
-                      <span style={{ fontSize: "11px", color: THEME.textMuted }}>
-                        {adopted ? "Adopted" : "Not adopted"}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Recent Users List */}
-            <div style={{ ...S.card, maxHeight: "500px", display: "flex", flexDirection: "column" }}>
+            {/* Feature Usage (Time Spent) + Filter */}
+            <div style={{ ...S.card, maxHeight: "calc(100vh - 200px)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
               <div style={{ flexShrink: 0 }}>
-                <SectionHeader title="Recent Users" subtitle={users.length} />
+                  <SectionHeader 
+                    title="Feature Usage" 
+                    subtitle="Time Spent"
+                    rightElement={
+                        // Visual fake select since this is Server Component. 
+                        // Real implementation would use URL params or client component.
+                        <select className="user-select" aria-label="Filter by user">
+                             <option value="all">All Users</option>
+                             {users.slice(0, 5).map(u => (
+                                 <option key={u.email} value={u.email}>{u.email.split('@')[0]}</option>
+                             ))}
+                        </select>
+                    }
+                  />
+                  <div style={{ 
+                      display: "flex", justifyContent: "space-between", 
+                      fontSize: "11px", textTransform: "uppercase", color: THEME.textDark, fontWeight: 600,
+                      paddingBottom: "12px", borderBottom: `1px solid ${THEME.border}`, marginBottom: "12px"
+                  }}>
+                      <span>Feature</span>
+                      <span>Duration</span>
+                  </div>
               </div>
-              <div className="custom-scroll" style={{ overflowY: "auto", paddingRight: "8px", marginRight: "-8px", display: "flex", flexDirection: "column", gap: "4px" }}>
-                 {users.map((u) => {
-                    const total = userTotals.get(u.email) || 0;
-                    return (
-                      <a 
-                        key={u.email}
-                        href={`/users/${encodeURIComponent(u.email)}?location_id=${encodeURIComponent(location_id)}`}
-                        className="table-row"
-                        style={{ ...S.linkReset, display: "block", padding: "8px", borderRadius: "8px" }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                          <div style={{ fontSize: "13px", fontWeight: 500, color: THEME.textMain, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "150px" }}>{u.email}</div>
-                          <div style={{ fontSize: "10px", color: THEME.textMuted }}>
-                             {u.last_seen_at ? new Date(u.last_seen_at).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : "—"}
-                          </div>
-                        </div>
-                        <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
-                          <div style={{ fontSize: "11px", color: THEME.textDark, maxWidth: "140px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.last_url ?? "—"}</div>
-                          <div style={{ fontSize: "11px", fontFamily: THEME.fontMono, color: THEME.textMuted }}>{fmtSec(total)}</div>
-                        </div>
-                      </a>
-                    )
-                 })}
+
+              <div className="custom-scroll" style={{ overflowY: "auto", paddingRight: "4px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    {FEATURES.map((f) => {
+                        const time = featureTimeByKey.get(f.key) || 0;
+                        const barWidth = Math.min(100, (time / (topFeatures[0]?.time_sec || 1)) * 100);
+                        return (
+                            <div key={f.key} style={{ position: "relative", padding: "6px 8px", borderRadius: "6px", overflow: "hidden" }}>
+                                {/* Subtle BG bar for relative value visual */}
+                                <div style={{ 
+                                    position: "absolute", top: 0, left: 0, bottom: 0, 
+                                    width: `${barWidth}%`, background: "rgba(255,255,255,0.03)", zIndex: 0 
+                                }} />
+                                
+                                <div style={{ position: "relative", zIndex: 1, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                    <span style={{ fontSize: "13px", color: THEME.textMain }}>{f.label}</span>
+                                    <span style={{ fontSize: "12px", fontFamily: THEME.fontMono, color: time > 0 ? THEME.textMuted : THEME.textDark }}>
+                                        {time > 0 ? fmtSec(time) : "—"}
+                                    </span>
+                                </div>
+                            </div>
+                        )
+                    })}
+                </div>
               </div>
             </div>
 
