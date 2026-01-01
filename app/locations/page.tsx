@@ -155,4 +155,4 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
       </div>
     </main>
   );
-}}
+}
