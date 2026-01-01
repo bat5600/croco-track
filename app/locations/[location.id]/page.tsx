@@ -386,9 +386,4 @@ export default async function LocationPage({ params }: { params: { location_id: 
       </div>
     </main>
   );
-}          );
-        })}
-      </div>
-    </main>
-  );
-}
+}          
