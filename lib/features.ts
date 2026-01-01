@@ -1,0 +1,18 @@
+export const FEATURES = [
+  { key: "dashboard", label: "Dashboard" },
+  { key: "conversations", label: "Conversations" },
+  { key: "calendars", label: "Calendars" },
+  { key: "contacts", label: "Contacts" },
+  { key: "opportunities", label: "Opportunities" },
+  { key: "payments", label: "Payments" },
+  { key: "marketing", label: "Marketing" },
+  { key: "automation", label: "Automation" },
+  { key: "reputation", label: "Reputation" },
+  { key: "blogs", label: "Blogs" },
+  { key: "memberships", label: "Memberships" },
+  { key: "integration", label: "Integration" },
+  { key: "settings", label: "Settings" },
+  { key: "funnels-websites", label: "Funnels Websites" },
+  { key: "form-builder", label: "Form Builder" },
+  { key: "survey-builder", label: "Survey Builder" },
+];
