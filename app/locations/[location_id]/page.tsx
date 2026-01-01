@@ -3,8 +3,9 @@ export const dynamic = "force-dynamic";
 
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { FEATURES } from "@/lib/features";
-import { fmtSec, healthColor, trendIcon, riskTags, cardStyle, pageShell } from "@/lib/ui";
+import { fmtSec, healthColor, trendIcon, riskTags } from "@/lib/ui";
 
+// --- Helpers ---
 function labelForFeature(key: string) {
   return FEATURES.find((x) => x.key === key)?.label ?? key;
 }
@@ -13,10 +14,140 @@ function toDay(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
-export default async function LocationPage({ params }: { params: { location_id: string } }) {
-  const location_id = decodeURIComponent(params.location_id);
+// --- CONSTANTS DE STYLE (Linear Theme) ---
+const THEME = {
+  bg: "#000000",
+  textMain: "#e4e4e7", // zinc-200
+  textMuted: "#71717a", // zinc-500
+  textDark: "#3f3f46", // zinc-700
+  border: "rgba(255, 255, 255, 0.08)",
+  cardBg: "rgba(24, 24, 27, 0.4)", // zinc-900 with opacity
+  cardHover: "rgba(39, 39, 42, 0.5)",
+  accent: "#10b981", // emerald-500
+  fontSans: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+  fontMono: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+};
 
-  // 0) location health
+// Styles objets réutilisables
+const S = {
+  page: {
+    minHeight: "100vh",
+    backgroundColor: THEME.bg,
+    color: THEME.textMuted,
+    fontFamily: THEME.fontSans,
+    padding: "40px",
+    boxSizing: "border-box" as const,
+  },
+  container: {
+    maxWidth: "1280px",
+    margin: "0 auto",
+  },
+  card: {
+    backgroundColor: THEME.cardBg,
+    border: `1px solid ${THEME.border}`,
+    borderRadius: "12px",
+    padding: "20px",
+    backdropFilter: "blur(4px)",
+    WebkitBackdropFilter: "blur(4px)",
+  },
+  sectionTitle: {
+    fontSize: "14px",
+    fontWeight: 600,
+    color: "#fff",
+    letterSpacing: "-0.01em",
+    margin: 0,
+  },
+  sectionSubtitle: {
+    fontSize: "12px",
+    color: THEME.textMuted,
+  },
+  badge: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    padding: "4px 10px",
+    borderRadius: "999px",
+    fontSize: "12px",
+    fontWeight: 500,
+    border: "1px solid rgba(255,255,255,0.1)",
+  },
+  linkReset: {
+    textDecoration: "none",
+    color: "inherit",
+  },
+};
+
+// --- COMPOSANTS UI ---
+
+const StatusBadge = ({ label, colorObj, icon }: { label: string | number; colorObj?: any; icon?: any }) => (
+  <span
+    style={{
+      ...S.badge,
+      backgroundColor: colorObj?.bg || "rgba(255,255,255,0.05)",
+      color: colorObj?.fg || "#fff",
+      borderColor: colorObj?.bg ? "transparent" : "rgba(255,255,255,0.1)",
+    }}
+  >
+    {icon && <span>{icon}</span>}
+    {label}
+  </span>
+);
+
+const SectionHeader = ({ title, subtitle }: { title: string; subtitle?: React.ReactNode }) => (
+  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+    <h3 style={S.sectionTitle}>{title}</h3>
+    {subtitle && <span style={S.sectionSubtitle}>{subtitle}</span>}
+  </div>
+);
+
+const MetricMini = ({ label, value }: { label: string; value: any }) => (
+  <div style={{ 
+    display: "flex", 
+    alignItems: "center", 
+    gap: "6px", 
+    background: "#18181b", 
+    border: `1px solid ${THEME.border}`, 
+    padding: "4px 8px", 
+    borderRadius: "6px",
+    fontSize: "11px"
+  }}>
+    <span style={{ color: THEME.textMuted }}>{label}</span>
+    <span style={{ color: THEME.textMain, fontWeight: 600 }}>{value ?? "—"}</span>
+  </div>
+);
+
+// CSS Grid responsive injecté
+const responsiveCSS = `
+  .linear-grid { display: grid; grid-template-columns: 1fr; gap: 24px; }
+  .col-main { grid-column: span 1; }
+  .col-side { grid-column: span 1; }
+  .header-flex { display: flex; flex-direction: column; gap: 24px; }
+  
+  @media (min-width: 768px) {
+    .linear-grid { grid-template-columns: repeat(12, 1fr); }
+    .col-main { grid-column: span 8; }
+    .col-side { grid-column: span 4; }
+    .header-flex { flex-direction: row; align-items: center; justify-content: space-between; }
+  }
+  
+  /* Scrollbar clean */
+  .custom-scroll::-webkit-scrollbar { width: 6px; }
+  .custom-scroll::-webkit-scrollbar-track { background: transparent; }
+  .custom-scroll::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+  .custom-scroll::-webkit-scrollbar-thumb:hover { background: #52525b; }
+
+  /* Table styles */
+  .table-row { transition: background 0.2s; }
+  .table-row:hover { background: rgba(255,255,255,0.03); }
+`;
+
+export default async function LocationPage({ params }: { params: Promise<{ location_id: string }> }) {
+  const p = await params;
+  const location_id = decodeURIComponent(p.location_id);
+
+  // --- DATA FETCHING ---
+  
+  // 0) Health
   const { data: health } = await supabaseAdmin.rpc("gocroco_location_health", {
     target_location_id: location_id,
     ref_day: null,
@@ -27,20 +158,13 @@ export default async function LocationPage({ params }: { params: { location_id: 
   const status = health?.status ?? "—";
   const trend = health?.trend?.indicator;
 
-  // A) Top features lifetime (location)
+  // A) Top features
   const { data: lifetimeRows, error: e1 } = await supabaseAdmin
     .from("user_feature_lifetime")
     .select("feature_key, time_sec")
     .eq("location_id", location_id);
 
-  if (e1) {
-    return (
-      <main style={pageShell()}>
-        <h1 style={{ fontSize: 28 }}>Location {location_id}</h1>
-        <pre style={{ whiteSpace: "pre-wrap" }}>{e1.message}</pre>
-      </main>
-    );
-  }
+  if (e1) return <ErrorState msg={e1.message} id={location_id} />;
 
   const featureTotals = new Map<string, number>();
   for (const r of lifetimeRows || []) {
@@ -50,11 +174,11 @@ export default async function LocationPage({ params }: { params: { location_id: 
   const topFeatures = Array.from(featureTotals.entries())
     .map(([feature_key, time_sec]) => ({ feature_key, time_sec }))
     .sort((a, b) => b.time_sec - a.time_sec)
-    .slice(0, 10);
+    .slice(0, 8);
 
   const totalLifetime = Array.from(featureTotals.values()).reduce((a, b) => a + b, 0);
 
-  // B) Users list (last seen) for this location
+  // B) Users list
   const { data: usersSeen, error: e2 } = await supabaseAdmin
     .from("user_last_seen")
     .select("email, last_seen_at, last_url")
@@ -62,40 +186,26 @@ export default async function LocationPage({ params }: { params: { location_id: 
     .order("last_seen_at", { ascending: false })
     .limit(250);
 
-  if (e2) {
-    return (
-      <main style={pageShell()}>
-        <h1 style={{ fontSize: 28 }}>Location {location_id}</h1>
-        <pre style={{ whiteSpace: "pre-wrap" }}>{e2.message}</pre>
-      </main>
-    );
-  }
+  if (e2) return <ErrorState msg={e2.message} id={location_id} />;
 
   const users = usersSeen || [];
   const emails = Array.from(new Set(users.map((u) => u.email)));
 
-  // total lifetime par user (dans cette location)
+  // total lifetime per user
   const { data: lifetimeByUserRows, error: e3 } = await supabaseAdmin
     .from("user_feature_lifetime")
     .select("email, time_sec")
     .eq("location_id", location_id)
     .in("email", emails.length ? emails : ["__none__"]);
 
-  if (e3) {
-    return (
-      <main style={pageShell()}>
-        <h1 style={{ fontSize: 28 }}>Location {location_id}</h1>
-        <pre style={{ whiteSpace: "pre-wrap" }}>{e3.message}</pre>
-      </main>
-    );
-  }
+  if (e3) return <ErrorState msg={e3.message} id={location_id} />;
 
   const userTotals = new Map<string, number>();
   for (const r of lifetimeByUserRows || []) {
     userTotals.set(r.email, (userTotals.get(r.email) || 0) + Number(r.time_sec || 0));
   }
 
-  // C) Sparkline 14 jours (temps total/jour pour la location)
+  // C) Sparkline
   const since = new Date();
   since.setDate(since.getDate() - 13);
 
@@ -105,14 +215,7 @@ export default async function LocationPage({ params }: { params: { location_id: 
     .eq("location_id", location_id)
     .gte("day", toDay(since));
 
-  if (e4) {
-    return (
-      <main style={pageShell()}>
-        <h1 style={{ fontSize: 28 }}>Location {location_id}</h1>
-        <pre style={{ whiteSpace: "pre-wrap" }}>{e4.message}</pre>
-      </main>
-    );
-  }
+  if (e4) return <ErrorState msg={e4.message} id={location_id} />;
 
   const dayMap = new Map<string, number>();
   for (const r of dailyRows || []) {
@@ -130,7 +233,7 @@ export default async function LocationPage({ params }: { params: { location_id: 
 
   const max = Math.max(1, ...series.map((s) => s.sec));
 
-  // D) Top at-risk users (enrich first N)
+  // D) Top at-risk (enriched)
   const ENRICH_USERS = 40;
   const enriched = await Promise.all(
     users.slice(0, ENRICH_USERS).map(async (u) => {
@@ -146,7 +249,6 @@ export default async function LocationPage({ params }: { params: { location_id: 
           ref_day: null,
         }),
       ]);
-
       return { ...u, health: uh, risk: ur, lifetime: userTotals.get(u.email) || 0 };
     })
   );
@@ -155,235 +257,235 @@ export default async function LocationPage({ params }: { params: { location_id: 
     .slice()
     .filter((x) => typeof x.health?.health_score === "number")
     .sort((a, b) => (a.health.health_score ?? 999) - (b.health.health_score ?? 999))
-    .slice(0, 8);
+    .slice(0, 5);
 
+  // --- RENDER ---
   return (
-    <main style={pageShell()}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <a href="/locations" style={{ textDecoration: "none", fontWeight: 900, color: "inherit" }}>
-          ← Back
-        </a>
-
-        <a
-          href={`/users?location_id=${encodeURIComponent(location_id)}`}
-          style={{
-            textDecoration: "none",
-            fontWeight: 900,
-            padding: "8px 12px",
-            borderRadius: 12,
-            border: "1px solid #e5e7eb",
-            background: "white",
-            color: "inherit",
-          }}
-        >
-          View users →
-        </a>
-      </div>
-
-      {/* Header card */}
-      <div style={{ marginTop: 14, ...cardStyle() }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+    <main style={S.page}>
+      <style dangerouslySetInnerHTML={{ __html: responsiveCSS }} />
+      
+      <div style={S.container}>
+        {/* HEADER */}
+        <header className="header-flex" style={{ borderBottom: `1px solid ${THEME.border}`, paddingBottom: "32px", marginBottom: "32px" }}>
           <div>
-            <h1 style={{ fontSize: 26, margin: 0 }}>Location</h1>
-            <div style={{ opacity: 0.8, marginTop: 6 }}>
-              <b>{location_id}</b>
-            </div>
-            <div style={{ opacity: 0.8, marginTop: 8 }}>
-              Lifetime time: <b>{fmtSec(totalLifetime)}</b> • Users: <b>{users.length}</b>
+            <nav style={{ fontSize: "12px", color: THEME.textMuted, marginBottom: "12px", display: "flex", gap: "8px" }}>
+              <a href="/locations" style={{ ...S.linkReset, color: THEME.textMuted }}>Locations</a>
+              <span>/</span>
+              <span style={{ color: THEME.textMain }}>{location_id}</span>
+            </nav>
+            <h1 style={{ fontSize: "32px", fontWeight: 700, color: "#fff", margin: 0, letterSpacing: "-0.02em" }}>{location_id}</h1>
+            <div style={{ display: "flex", alignItems: "center", gap: "16px", marginTop: "12px", fontSize: "14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: THEME.accent, boxShadow: `0 0 8px ${THEME.accent}40` }}></span>
+                <span style={{ color: THEME.textMain, fontWeight: 500 }}>{users.length} Active Users</span>
+              </div>
+              <span style={{ color: THEME.textDark }}>•</span>
+              <div style={{ color: THEME.textMuted }}>
+                Lifetime: <span style={{ color: THEME.textMain, fontFamily: THEME.fontMono }}>{fmtSec(totalLifetime)}</span>
+              </div>
             </div>
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
-            <span
+          <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
+             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                   <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: THEME.textMuted, fontWeight: 600 }}>Health Score</div>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: "8px", justifyContent: "flex-end" }}>
+                         <span style={{ fontSize: "28px", fontWeight: 700, color: "#fff", lineHeight: 1 }}>{score === null ? "—" : score}</span>
+                         <span style={{ fontSize: "14px", fontWeight: 500, color: badge.fg }}>{status}</span>
+                      </div>
+                   </div>
+                </div>
+                <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+                   <MetricMini label="Login" value={health?.components?.login_activity_score} />
+                   <MetricMini label="Adoption" value={health?.components?.product_adoption_score} />
+                   <MetricMini label="Feedback" value={health?.components?.feedback_score} />
+                </div>
+             </div>
+             
+             <a
+              href={`/users?location_id=${encodeURIComponent(location_id)}`}
               style={{
-                padding: "7px 12px",
-                borderRadius: 999,
-                background: badge.bg,
-                color: badge.fg,
-                fontWeight: 900,
-                fontSize: 13,
+                ...S.linkReset,
+                padding: "8px 16px",
+                backgroundColor: "#fff",
+                color: "#000",
+                fontSize: "13px",
+                fontWeight: 600,
+                borderRadius: "8px",
+                marginLeft: "16px",
+                display: "inline-block"
               }}
             >
-              {score === null ? "—" : score} • {status} • {trendIcon(trend)}
-            </span>
+              View Users →
+            </a>
+          </div>
+        </header>
 
-            <div style={{ opacity: 0.85, fontWeight: 800 }}>
-              Login <b>{health?.components?.login_activity_score ?? "—"}</b> • Adoption{" "}
-              <b>{health?.components?.product_adoption_score ?? "—"}</b> • Feedback{" "}
-              <b>{health?.components?.feedback_score ?? "—"}</b>
+        {/* BENTO GRID */}
+        <div className="linear-grid">
+          
+          {/* COL 1 (Activity) */}
+          <div className="col-main" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            
+            {/* SPARKLINE */}
+            <div style={{ ...S.card, minHeight: "200px", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+              <SectionHeader title="Activity Trend" subtitle="Last 14 Days" />
+              <div style={{ display: "flex", alignItems: "flex-end", gap: "4px", height: "120px", width: "100%", paddingTop: "16px" }}>
+                {series.map((p) => {
+                  const heightPct = Math.max(5, Math.round((p.sec / max) * 100));
+                  return (
+                    <div key={p.day} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "8px", height: "100%", justifyContent: "flex-end" }} title={`${p.day}: ${fmtSec(p.sec)}`}>
+                      <div 
+                        style={{ 
+                          width: "100%", 
+                          height: `${heightPct}%`, 
+                          background: p.sec ? "#3f3f46" : "#27272a", 
+                          borderRadius: "2px",
+                          transition: "all 0.3s ease",
+                          opacity: p.sec ? 1 : 0.3
+                        }} 
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* AT RISK USERS TABLE */}
+            <div style={S.card}>
+              <SectionHeader 
+                title="Attention Required" 
+                subtitle={<span style={{ color: "#fb923c", fontWeight: 500 }}>{topAtRisk.length} Users At Risk</span>} 
+              />
+              
+              {topAtRisk.length === 0 ? (
+                 <div style={{ fontSize: "13px", color: THEME.textMuted, fontStyle: "italic", padding: "16px 0" }}>No users currently flagged as at-risk.</div>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px", textAlign: "left" }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${THEME.border}` }}>
+                        <th style={{ padding: "0 0 12px 0", color: THEME.textMuted, fontWeight: 500, fontSize: "11px", textTransform: "uppercase" }}>User</th>
+                        <th style={{ padding: "0 0 12px 0", color: THEME.textMuted, fontWeight: 500, fontSize: "11px", textTransform: "uppercase", textAlign: "right" }}>Health</th>
+                        <th style={{ padding: "0 0 12px 16px", color: THEME.textMuted, fontWeight: 500, fontSize: "11px", textTransform: "uppercase" }}>Primary Risk Factors</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {topAtRisk.map((u) => {
+                         const uScore = Math.round(u.health?.health_score || 0);
+                         const uTrend = u.health?.trend?.indicator;
+                         const tags = riskTags(u.risk).slice(0, 2);
+                        return (
+                          <tr key={u.email} className="table-row" style={{ borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
+                            <td style={{ padding: "12px 16px 12px 0" }}>
+                              <a href={`/users/${encodeURIComponent(u.email)}?location_id=${encodeURIComponent(location_id)}`} style={S.linkReset}>
+                                <div style={{ color: THEME.textMain, fontWeight: 500 }}>{u.email}</div>
+                                <div style={{ fontSize: "11px", color: THEME.textMuted, marginTop: "2px" }}>{u.last_url || "No activity"}</div>
+                              </a>
+                            </td>
+                            <td style={{ padding: "12px 0", textAlign: "right" }}>
+                               <StatusBadge 
+                                 label={uScore} 
+                                 colorObj={healthColor(u.health?.color)} 
+                                 icon={trendIcon(uTrend)} 
+                               />
+                            </td>
+                            <td style={{ padding: "12px 0 12px 16px" }}>
+                              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                                {tags.map(t => (
+                                  <span key={t} style={{ 
+                                    fontSize: "10px", 
+                                    padding: "2px 6px", 
+                                    borderRadius: "4px", 
+                                    border: `1px solid ${THEME.border}`, 
+                                    color: THEME.textMuted,
+                                    background: "rgba(255,255,255,0.02)"
+                                  }}>
+                                    {t}
+                                  </span>
+                                ))}
+                                {tags.length === 0 && <span style={{ color: THEME.textDark }}>—</span>}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Row 2: sparkline + top features */}
-      <div style={{ marginTop: 14, display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" as any }}>
-        <div style={cardStyle()}>
-          <div style={{ fontWeight: 900, marginBottom: 10 }}>Last 14 days (total time)</div>
-          <div style={{ display: "flex", gap: 6, alignItems: "flex-end", height: 64 }}>
-            {series.map((p) => (
-              <div key={p.day} title={`${p.day} • ${fmtSec(p.sec)}`} style={{ width: 10, height: 64 }}>
-                <div
-                  style={{
-                    height: Math.max(3, Math.round((p.sec / max) * 64)),
-                    borderRadius: 8,
-                    background: "#111827",
-                    opacity: p.sec ? 1 : 0.15,
-                  }}
-                />
+          {/* COL 2 (Sidebar) */}
+          <div className="col-side" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            
+            {/* Top Features */}
+            <div style={S.card}>
+              <SectionHeader title="Top Features" subtitle="Lifetime" />
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                {topFeatures.map((f, i) => (
+                  <div key={f.feature_key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "12px", overflow: "hidden" }}>
+                      <span style={{ fontSize: "11px", fontFamily: THEME.fontMono, color: THEME.textDark, width: "16px" }}>{i + 1}</span>
+                      <span style={{ fontSize: "13px", fontWeight: 500, color: THEME.textMain, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {labelForFeature(f.feature_key)}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: "11px", fontFamily: THEME.fontMono, color: THEME.textMuted, background: "rgba(255,255,255,0.03)", padding: "2px 6px", borderRadius: "4px" }}>
+                      {fmtSec(f.time_sec)}
+                    </span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div style={{ marginTop: 10, opacity: 0.75, fontSize: 12 }}>Survol pour voir les valeurs.</div>
-        </div>
+            </div>
 
-        <div style={cardStyle()}>
-          <div style={{ fontWeight: 900, marginBottom: 10 }}>Top features (lifetime)</div>
-          <div style={{ display: "grid", gap: 10 }}>
-            {topFeatures.map((f) => (
-              <div
-                key={f.feature_key}
-                style={{
-                  padding: 12,
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 12,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  background: "white",
-                }}
-              >
-                <div style={{ fontWeight: 900 }}>{labelForFeature(f.feature_key)}</div>
-                <div style={{ fontWeight: 900 }}>{fmtSec(f.time_sec)}</div>
+            {/* Recent Users List */}
+            <div style={{ ...S.card, maxHeight: "500px", display: "flex", flexDirection: "column" }}>
+              <div style={{ flexShrink: 0 }}>
+                <SectionHeader title="Recent Users" subtitle={users.length} />
               </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Top at-risk */}
-      <div style={{ marginTop: 14, ...cardStyle() }}>
-        <div style={{ fontWeight: 900, marginBottom: 10 }}>
-          Top at-risk users <span style={{ opacity: 0.7, fontWeight: 700 }}>(enriched first {ENRICH_USERS})</span>
-        </div>
-
-        {topAtRisk.length === 0 ? (
-          <div style={{ opacity: 0.75 }}>Not enough data yet.</div>
-        ) : (
-          <div style={{ display: "grid", gap: 10 }}>
-            {topAtRisk.map((u) => {
-              const ub = healthColor(u.health?.color);
-              const uscore = Math.round(u.health?.health_score || 0);
-              const utrend = u.health?.trend?.indicator;
-              const tags = riskTags(u.risk).slice(0, 2);
-
-              return (
-                <a
-                  key={u.email}
-                  href={`/users/${encodeURIComponent(u.email)}?location_id=${encodeURIComponent(location_id)}`}
-                  style={{
-                    display: "block",
-                    padding: 12,
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 12,
-                    textDecoration: "none",
-                    color: "inherit",
-                    background: "white",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                    <div style={{ fontWeight: 900 }}>{u.email}</div>
-
-                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                      <span
-                        style={{
-                          padding: "5px 10px",
-                          borderRadius: 999,
-                          background: ub.bg,
-                          color: ub.fg,
-                          fontWeight: 900,
-                          fontSize: 12,
-                        }}
+              <div className="custom-scroll" style={{ overflowY: "auto", paddingRight: "8px", marginRight: "-8px", display: "flex", flexDirection: "column", gap: "4px" }}>
+                 {users.map((u) => {
+                    const total = userTotals.get(u.email) || 0;
+                    return (
+                      <a 
+                        key={u.email}
+                        href={`/users/${encodeURIComponent(u.email)}?location_id=${encodeURIComponent(location_id)}`}
+                        className="table-row"
+                        style={{ ...S.linkReset, display: "block", padding: "8px", borderRadius: "8px" }}
                       >
-                        {uscore} • {u.health?.status} • {trendIcon(utrend)}
-                      </span>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                          <div style={{ fontSize: "13px", fontWeight: 500, color: THEME.textMain, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "150px" }}>{u.email}</div>
+                          <div style={{ fontSize: "10px", color: THEME.textMuted }}>
+                             {u.last_seen_at ? new Date(u.last_seen_at).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : "—"}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
+                          <div style={{ fontSize: "11px", color: THEME.textDark, maxWidth: "140px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.last_url ?? "—"}</div>
+                          <div style={{ fontSize: "11px", fontFamily: THEME.fontMono, color: THEME.textMuted }}>{fmtSec(total)}</div>
+                        </div>
+                      </a>
+                    )
+                 })}
+              </div>
+            </div>
 
-                      <span style={{ opacity: 0.75, fontWeight: 800 }}>
-                        Lifetime: {fmtSec(u.lifetime)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {tags.length > 0 && (
-                    <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                      {tags.map((t: string) => (
-                        <span
-                          key={t}
-                          style={{
-                            border: "1px solid #e5e7eb",
-                            borderRadius: 999,
-                            padding: "3px 10px",
-                            fontSize: 12,
-                            opacity: 0.95,
-                            fontWeight: 800,
-                          }}
-                        >
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  <div style={{ opacity: 0.7, marginTop: 10, wordBreak: "break-all", fontSize: 12 }}>
-                    {u.last_url || "—"}
-                  </div>
-                </a>
-              );
-            })}
           </div>
-        )}
-      </div>
-
-      {/* Users list */}
-      <div style={{ marginTop: 14, ...cardStyle() }}>
-        <div style={{ fontWeight: 900, marginBottom: 10 }}>Users (last seen)</div>
-
-        <div style={{ display: "grid", gap: 10 }}>
-          {users.map((u) => {
-            const total = userTotals.get(u.email) || 0;
-            return (
-              <a
-                key={u.email}
-                href={`/users/${encodeURIComponent(u.email)}?location_id=${encodeURIComponent(location_id)}`}
-                style={{
-                  display: "block",
-                  padding: 12,
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 12,
-                  textDecoration: "none",
-                  color: "inherit",
-                  background: "white",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                  <div style={{ fontWeight: 900 }}>{u.email}</div>
-                  <div style={{ opacity: 0.75, fontWeight: 800 }}>
-                    {u.last_seen_at ? new Date(u.last_seen_at).toLocaleString() : "—"}
-                  </div>
-                </div>
-
-                <div style={{ opacity: 0.85, marginTop: 8 }}>
-                  Lifetime: <b>{fmtSec(total)}</b>
-                </div>
-
-                <div style={{ opacity: 0.7, marginTop: 6, wordBreak: "break-all", fontSize: 12 }}>
-                  {u.last_url || "—"}
-                </div>
-              </a>
-            );
-          })}
         </div>
       </div>
+    </main>
+  );
+}
+
+// --- Error Helper ---
+function ErrorState({ msg, id }: { msg: string; id: string }) {
+  return (
+    <main style={{ ...S.page, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" }}>
+      <h1 style={{ fontSize: "24px", fontWeight: 700, color: "#fff", marginBottom: "16px" }}>Error loading {id}</h1>
+      <pre style={{ background: "rgba(127, 29, 29, 0.2)", color: "#fecaca", padding: "16px", borderRadius: "8px", border: "1px solid rgba(127, 29, 29, 0.4)" }}>{msg}</pre>
     </main>
   );
 }
