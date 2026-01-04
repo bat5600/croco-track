@@ -10,6 +10,10 @@ type TokenExchangeResponse = {
 const GHL_BASE_URL =
   process.env.GHL_BASE_URL || "https://services.leadconnectorhq.com";
 
+function getVersionHeader() {
+  return process.env.GHL_API_VERSION || "2021-07-28";
+}
+
 function requireEnv(name: string) {
   const value = process.env[name];
   if (!value) {
@@ -45,6 +49,7 @@ export async function exchangeCodeForAgencyToken(code: string) {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "application/json",
+      Version: getVersionHeader(),
     },
     body,
   });
@@ -73,6 +78,7 @@ export async function refreshAgencyToken(refreshToken: string) {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "application/json",
+      Version: getVersionHeader(),
     },
     body,
   });
@@ -95,6 +101,7 @@ export async function exchangeLocationToken(params: {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${params.agencyAccessToken}`,
+      Version: getVersionHeader(),
     },
     body: JSON.stringify({
       companyId: params.companyId,
