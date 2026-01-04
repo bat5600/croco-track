@@ -35,18 +35,61 @@ function pickLocationName(profile: any, fallback: string) {
 
 function formatSubscription(subscription: any) {
   if (!subscription) return null;
+  const data = subscription?.data || subscription;
+  const planDetails = data?.plan || subscription?.plan;
+  const prices = Array.isArray(planDetails?.prices) ? planDetails.prices : [];
+  const activeMonthly =
+    prices.find((p: any) => p?.billingInterval === "month" && p?.active) ||
+    prices.find((p: any) => p?.billingInterval === "month") ||
+    prices.find((p: any) => p?.active) ||
+    prices[0];
   const plan =
-    subscription.planName ||
-    subscription?.plan?.name ||
-    subscription?.plan?.id ||
-    subscription?.planId;
-  const status = subscription.status || subscription?.subscriptionStatus;
-  const mrr = subscription.mrr || subscription?.mrrAmount || subscription?.amount;
+    planDetails?.title ||
+    planDetails?.name ||
+    planDetails?.id ||
+    data.planName ||
+    data?.plan?.name ||
+    data?.plan?.id ||
+    data?.planId ||
+    data?.saasPlanId ||
+    data?.productId ||
+    data?.priceId;
+  const status = data.status || data?.subscriptionStatus;
+  const mrr =
+    data.mrr ||
+    data?.mrrAmount ||
+    data?.amount ||
+    planDetails?.mrr ||
+    planDetails?.amount ||
+    planDetails?.price ||
+    planDetails?.price?.amount ||
+    planDetails?.price?.unitAmount ||
+    planDetails?.price?.value ||
+    activeMonthly?.amount;
   return {
     plan,
     status,
     mrr,
+    mrrCurrency: activeMonthly?.currency || planDetails?.currency || null,
+    mrrSymbol: activeMonthly?.symbol || null,
+    mrrInterval: activeMonthly?.billingInterval || null,
+    createdAt: planDetails?.createdAt || data?.createdAt || null,
   };
+}
+
+function formatMoney(
+  amount: number | string | null | undefined,
+  symbol?: string | null,
+  currency?: string | null
+) {
+  const value = Number(amount);
+  if (!Number.isFinite(value)) return null;
+  const normalized = value >= 100 ? value / 100 : value;
+  const currencyCode = currency ? String(currency).toUpperCase() : null;
+  if (currencyCode === "EUR") return `€${normalized}`;
+  if (symbol) return `${symbol}${normalized}`;
+  if (currencyCode) return `${normalized} ${currencyCode}`;
+  return String(normalized);
 }
 
 // --- CONSTANTS DE STYLE (Linear Theme) ---
@@ -270,6 +313,34 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
   const locationSubscription = locationRow?.subscription || null;
   const locationName = pickLocationName(locationProfile, location_id);
   const subscriptionSummary = formatSubscription(locationSubscription);
+  const subscriptionMrr = formatMoney(
+    subscriptionSummary?.mrr,
+    subscriptionSummary?.mrrSymbol,
+    subscriptionSummary?.mrrCurrency
+  );
+  const subscriptionCreatedAt = subscriptionSummary?.createdAt
+    ? new Date(subscriptionSummary.createdAt).toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      })
+    : null;
+  const subscriptionStatus = subscriptionSummary?.status
+    ? String(subscriptionSummary.status)
+    : null;
+  const subscriptionStatusLower = subscriptionStatus?.toLowerCase();
+  const subscriptionStatusStyle =
+    subscriptionStatusLower === "active"
+      ? {
+          backgroundColor: "rgba(16,185,129,0.15)",
+          color: "#34d399",
+          borderColor: "rgba(16,185,129,0.35)",
+        }
+      : {
+          backgroundColor: "rgba(113,113,122,0.15)",
+          color: THEME.textMuted,
+          borderColor: THEME.border,
+        };
   
   // 0) Health
   const { data: health } = await supabaseAdmin.rpc("gocroco_location_health_v2", {
@@ -437,7 +508,40 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
                 <span style={{ color: THEME.textMain, fontFamily: THEME.fontMono }}>
                   {subscriptionSummary?.plan || "n/a"}
                 </span>
-                {subscriptionSummary?.status ? ` (${subscriptionSummary.status})` : ""}
+                {subscriptionMrr && (
+                  <span style={{ marginLeft: "8px", color: THEME.textMuted }}>
+                    MRR:{" "}
+                    <span style={{ color: THEME.textMain, fontFamily: THEME.fontMono }}>
+                      {subscriptionMrr}
+                      {subscriptionSummary?.mrrInterval ? `/${subscriptionSummary.mrrInterval}` : ""}
+                    </span>
+                  </span>
+                )}
+                {subscriptionStatus && (
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      marginLeft: "8px",
+                      padding: "2px 8px",
+                      borderRadius: "999px",
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      letterSpacing: "0.02em",
+                      textTransform: "uppercase",
+                      border: `1px solid ${subscriptionStatusStyle.borderColor}`,
+                      backgroundColor: subscriptionStatusStyle.backgroundColor,
+                      color: subscriptionStatusStyle.color,
+                    }}
+                  >
+                    {subscriptionStatus}
+                  </span>
+                )}
+                {subscriptionCreatedAt && (
+                  <span style={{ marginLeft: "8px", color: THEME.textDark }}>
+                    Created: {subscriptionCreatedAt}
+                  </span>
+                )}
               </div>
             </div>
           </div>

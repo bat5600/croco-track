@@ -54,3 +54,18 @@ export async function getLocationSubscription(
     "2021-04-15"
   );
 }
+
+export async function getSaasPlan(
+  planId: string,
+  companyId: string,
+  accessToken: string
+) {
+  const params = new URLSearchParams();
+  if (companyId) params.set("companyId", companyId);
+  const query = params.toString();
+  return fetchGhlJson<unknown>(
+    `/saas/saas-plan/${encodeURIComponent(planId)}${query ? `?${query}` : ""}`,
+    accessToken,
+    "2021-04-15"
+  );
+}

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { getLocationProfile, getLocationSubscription } from "@/lib/ghlService";
+import { getLocationProfile, getLocationSubscription, getSaasPlan } from "@/lib/ghlService";
 import { getAgencyAccessToken, getLocationAccessToken, TokenError } from "@/lib/ghlTokens";
 
 function extractCompanyId(profile: any, fallback?: string | null) {
@@ -71,6 +71,19 @@ export async function syncLocation(params: { locationId: string; companyId?: str
   try {
     const { token: agencyToken } = await getAgencyAccessToken(companyId);
     subscription = await getLocationSubscription(locationId, companyId, agencyToken);
+    const planId =
+      (subscription as any)?.data?.saasPlanId ||
+      (subscription as any)?.data?.planId ||
+      (subscription as any)?.data?.priceId;
+    if (planId) {
+      try {
+        const planResponse = await getSaasPlan(String(planId), companyId, agencyToken);
+        const planData = (planResponse as any)?.data || planResponse;
+        subscription = { ...(subscription as any), plan: planData };
+      } catch {
+        // Plan enrichment is best-effort; keep subscription if plan lookup fails.
+      }
+    }
   } catch (error) {
     subscription = null;
     const message = error instanceof Error ? error.message : "Subscription fetch failed";
