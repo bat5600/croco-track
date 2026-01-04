@@ -323,9 +323,56 @@ export default async function LoginActivityPage({ searchParams }: { searchParams
     count: bucketCounts.get(b.key) || 0,
   }));
 
-  const bucketMax = Math.max(1, ...bucketData.map((b) => b.count));
-
   const viewLabel = view === "users" ? "Users" : "Locations";
+  const labelForKey = (key: string) =>
+    view === "locations" ? locationNameMap.get(key) || key : key;
+  const hrefForKey = (key: string) =>
+    view === "users"
+      ? `/users/${encodeURIComponent(key)}`
+      : `/locations/${encodeURIComponent(key)}`;
+
+  const sortByDateDesc = (a: Entry, b: Entry) =>
+    (b.ts ? new Date(b.ts).getTime() : 0) - (a.ts ? new Date(a.ts).getTime() : 0);
+
+  const bucketItems: Record<string, ListItem[]> = {};
+  for (const [key, entries] of Object.entries(bucketEntries)) {
+    bucketItems[key] = entries
+      .slice()
+      .sort(sortByDateDesc)
+      .map((entry) => ({
+        key: entry.key,
+        label: labelForKey(entry.key),
+        href: hrefForKey(entry.key),
+        meta: entry.ts ? new Date(entry.ts).toLocaleDateString() : "n/a",
+      }));
+  }
+
+  const activeItems: ListItem[] = activeEntries
+    .slice()
+    .sort(sortByDateDesc)
+    .map((entry) => ({
+      key: entry.key,
+      label: labelForKey(entry.key),
+      href: hrefForKey(entry.key),
+      meta: entry.ts ? new Date(entry.ts).toLocaleDateString() : "n/a",
+    }));
+
+  const last1dItems: ListItem[] = last1dEntries
+    .slice()
+    .sort(sortByDateDesc)
+    .map((entry) => ({
+      key: entry.key,
+      label: labelForKey(entry.key),
+      href: hrefForKey(entry.key),
+      meta: entry.ts ? new Date(entry.ts).toLocaleDateString() : "n/a",
+    }));
+
+  const powerListItems: ListItem[] = powerSorted.map((item) => ({
+    key: item.key,
+    label: labelForKey(item.key),
+    href: hrefForKey(item.key),
+    meta: item.score === null ? "n/a" : `${item.score}%`,
+  }));
 
   return (
     <main className="min-h-screen bg-black text-zinc-400 font-sans p-6 md:p-10 selection:bg-zinc-800">
@@ -362,65 +409,19 @@ export default async function LoginActivityPage({ searchParams }: { searchParams
           </div>
         </header>
 
-        <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard label={`Total ${viewLabel.toLowerCase()}`} value={totalEntities.toLocaleString()} />
-          <StatCard label="Active (7d)" value={`${activePct}%`} hint={`${activeCount.toLocaleString()} active`} />
-          <StatCard
-            label={view === "users" ? "Power users" : "Power locations"}
-            value={`${powerPct}%`}
-            hint={`${powerCount.toLocaleString()} power`}
-            href="#power-list"
-          />
-          <StatCard label="Last login <= 1d" value={(bucketCounts.get("1d") || 0).toLocaleString()} />
-        </section>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <Card className="lg:col-span-2">
-            <SectionHeader title="Last login buckets" subtitle="1 / 7 / 15 / 30 days" />
-            <div className="flex items-end gap-3 h-48">
-              {bucketData.map((b) => {
-                const heightPct = Math.max(6, Math.round((b.count / bucketMax) * 100));
-                return (
-                  <div key={b.key} className="flex-1 flex flex-col items-center justify-end h-full group">
-                    <div className="text-[10px] text-zinc-500 mb-2">{b.count}</div>
-                    <div
-                      className="w-full rounded-sm transition-all duration-300"
-                      style={{
-                        height: `${heightPct}%`,
-                        backgroundColor: b.count ? "#e4e4e7" : "#27272a",
-                        opacity: b.count ? 0.9 : 0.3,
-                      }}
-                    />
-                    <div className="text-[10px] text-zinc-600 mt-2 font-mono">{b.label}</div>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="text-xs text-zinc-500 mt-4">
-              Based on last seen timestamps.
-            </div>
-          </Card>
-
-          <Card>
-            <SectionHeader
-              title={view === "users" ? "Power users rule" : "Power locations rule"}
-              subtitle="7d or 28d threshold"
-            />
-            <div className="text-sm text-zinc-300 space-y-2">
-              <div className="flex items-center justify-between">
-                <span>7 days</span>
-                <span className="font-mono text-zinc-400">&gt;= 5 connections</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>28 days</span>
-                <span className="font-mono text-zinc-400">&gt;= 20 connections</span>
-              </div>
-            </div>
-            <div className="mt-6 text-xs text-zinc-500">
-              Connections counted from tracked events.
-            </div>
-          </Card>
-        </div>
+        <LoginActivityOverview
+          viewLabel={viewLabel}
+          totalEntities={totalEntities}
+          activePct={activePct}
+          activeCount={activeCount}
+          powerPct={powerPct}
+          powerCount={powerCount}
+          bucketData={bucketData}
+          bucketItems={bucketItems}
+          activeItems={activeItems}
+          powerItems={powerListItems}
+          last1dItems={last1dItems}
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card>
