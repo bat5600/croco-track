@@ -25,12 +25,28 @@ export async function GET(req: Request) {
   if (authError) return authError;
 
   const { searchParams } = new URL(req.url);
-  const companyId = searchParams.get("companyId");
+  let companyId = searchParams.get("companyId");
   const locationId = searchParams.get("locationId");
+
+  if (!companyId && locationId) {
+    const { data: locationRow, error: locationError } = await supabaseAdmin
+      .from("ghl_locations")
+      .select("company_id")
+      .eq("location_id", locationId)
+      .maybeSingle();
+
+    if (locationError) {
+      return NextResponse.json({ ok: false, error: locationError.message }, { status: 500 });
+    }
+
+    if (locationRow?.company_id) {
+      companyId = String(locationRow.company_id);
+    }
+  }
 
   if (!companyId) {
     return NextResponse.json(
-      { ok: false, error: "companyId required" },
+      { ok: false, error: "companyId required (or locationId not found)" },
       { status: 400 }
     );
   }
