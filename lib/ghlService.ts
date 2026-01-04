@@ -1,21 +1,25 @@
 const GHL_API_BASE =
   process.env.GHL_API_BASE || "https://services.leadconnectorhq.com";
 
-function getHeaders(accessToken: string) {
+function getHeaders(accessToken: string, versionOverride?: string) {
   const headers = new Headers();
   headers.set("Authorization", `Bearer ${accessToken}`);
   headers.set("Accept", "application/json");
 
-  const version = process.env.GHL_API_VERSION || "2021-07-28";
+  const version = versionOverride || process.env.GHL_API_VERSION || "2021-07-28";
   headers.set("Version", version);
 
   return headers;
 }
 
-async function fetchGhlJson<T>(path: string, accessToken: string): Promise<T> {
+async function fetchGhlJson<T>(
+  path: string,
+  accessToken: string,
+  versionOverride?: string
+): Promise<T> {
   const res = await fetch(`${GHL_API_BASE}${path}`, {
     method: "GET",
-    headers: getHeaders(accessToken),
+    headers: getHeaders(accessToken, versionOverride),
   });
 
   if (!res.ok) {
@@ -45,6 +49,7 @@ export async function getLocationSubscription(
     `/saas/get-saas-subscription/${encodeURIComponent(locationId)}${
       query ? `?${query}` : ""
     }`,
-    accessToken
+    accessToken,
+    "2021-04-15"
   );
 }
