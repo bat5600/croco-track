@@ -33,7 +33,8 @@ async function fetchGhlJson<T>(
 export async function getLocationProfile(locationId: string, accessToken: string) {
   return fetchGhlJson<unknown>(
     `/locations/${encodeURIComponent(locationId)}`,
-    accessToken
+    accessToken,
+    "2021-07-28"
   );
 }
 
