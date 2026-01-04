@@ -23,7 +23,11 @@ async function resolveCompanyIdAndProfile(locationId: string) {
   if (error) {
     throw new TokenError(500, error.message);
   }
+  if (!agencies || agencies.length === 0) {
+    throw new TokenError(404, "No agency tokens found");
+  }
 
+  let lastError: string | null = null;
   for (const agency of agencies || []) {
     const companyId = String(agency.company_id || "");
     if (!companyId) continue;
@@ -34,12 +38,15 @@ async function resolveCompanyIdAndProfile(locationId: string) {
       if (resolvedCompanyId) {
         return { companyId: resolvedCompanyId, profile };
       }
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      lastError = message;
       // Try next agency token.
     }
   }
 
-  throw new TokenError(404, "Location not found for any agency");
+  const suffix = lastError ? ` Last error: ${lastError}` : "";
+  throw new TokenError(404, `Location not found for any agency.${suffix}`);
 }
 
 export async function syncLocation(params: { locationId: string; companyId?: string | null }) {
@@ -59,7 +66,16 @@ export async function syncLocation(params: { locationId: string; companyId?: str
 
   const { token: locationToken } = await getLocationAccessToken({ companyId, locationId });
   const profile = profileFromAgency ?? (await getLocationProfile(locationId, locationToken));
-  const subscription = null;
+  let subscription: unknown | null = null;
+  let subscriptionError: string | null = null;
+  try {
+    const { token: agencyToken } = await getAgencyAccessToken(companyId);
+    subscription = await getLocationSubscription(locationId, companyId, agencyToken);
+  } catch (error) {
+    subscription = null;
+    const message = error instanceof Error ? error.message : "Subscription fetch failed";
+    subscriptionError = message;
+  }
 
   const { error } = await supabaseAdmin.from("ghl_locations").upsert(
     {
@@ -77,5 +93,5 @@ export async function syncLocation(params: { locationId: string; companyId?: str
     throw new TokenError(500, error.message);
   }
 
-  return { companyId, locationId };
+  return { companyId, locationId, subscriptionError };
 }

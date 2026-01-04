@@ -10,6 +10,7 @@ type Row = { location_id: string; last_seen_at: string | null };
 
 type ViewRow = {
   location_id: string;
+  display_name: string;
   last_seen_at: string | null;
   total_sec: number;
   total_pct: number;
@@ -26,6 +27,17 @@ type ViewRow = {
 function toPct(n: number, max: number) {
   if (!max) return 0;
   return Math.max(0, Math.min(100, Math.round((n / max) * 100)));
+}
+
+function pickLocationName(profile: any, fallback: string) {
+  if (!profile) return fallback;
+  return (
+    profile.name ||
+    profile?.location?.name ||
+    profile?.business?.name ||
+    profile?.companyName ||
+    fallback
+  );
 }
 
 // --- Components ---
@@ -124,6 +136,20 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
 
   const maxTotal = Math.max(0, ...Array.from(totals.values()));
 
+  // 2b) resolve display names from ghl_locations (fallback to id)
+  const nameMap = new Map<string, string>();
+  if (ids.length) {
+    const { data: locationRows } = await supabaseAdmin
+      .from("ghl_locations")
+      .select("location_id, profile")
+      .in("location_id", ids);
+    for (const row of locationRows || []) {
+      const id = String(row.location_id || "");
+      if (!id) continue;
+      nameMap.set(id, pickLocationName(row.profile, id));
+    }
+  }
+
   // 3) health enrichment (first N locations)
   const ENRICH_LIMIT = 40;
   const healthMap = new Map<string, any>();
@@ -148,8 +174,10 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
     const days30 = Number(health?.login?.days30 || 0);
     const loginDaysCapped = Math.min(5, days7);
     const loginPct = Math.round((loginDaysCapped / 5) * 100);
+    const displayName = nameMap.get(l.location_id) || l.location_id;
     return {
       location_id: l.location_id,
+      display_name: displayName,
       last_seen_at: l.last_seen_at,
       total_sec: total,
       total_pct: toPct(total, maxTotal),
@@ -165,7 +193,7 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
   });
 
   const filtered = viewRows.filter((r) => {
-    if (q && !r.location_id.toLowerCase().includes(q)) return false;
+    if (q && !r.location_id.toLowerCase().includes(q) && !r.display_name.toLowerCase().includes(q)) return false;
     if (healthFilter && r.health_status.toLowerCase() !== healthFilter) return false;
     return true;
   });
@@ -270,7 +298,7 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
                             href={`/locations/${encodeURIComponent(l.location_id)}`}
                             className="text-sm font-bold text-zinc-200 group-hover:text-white group-hover:underline decoration-zinc-700 underline-offset-4 transition-all"
                           >
-                            {l.location_id}
+                            {l.display_name}
                           </a>
                           <a
                             href={`/users?location_id=${encodeURIComponent(l.location_id)}`}

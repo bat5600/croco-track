@@ -245,6 +245,12 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
       }
 
       revalidatePath(`/locations/${encodeURIComponent(locationId)}`);
+      if (data?.subscriptionError) {
+        return {
+          ok: false,
+          message: `Sync completed. Subscription failed: ${data.subscriptionError}`,
+        };
+      }
       return { ok: true, message: "Sync completed." };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Sync failed.";

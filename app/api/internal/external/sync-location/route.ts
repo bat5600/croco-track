@@ -36,6 +36,7 @@ export async function POST(req: Request) {
       ok: true,
       companyId: result.companyId,
       locationId: result.locationId,
+      subscriptionError: result.subscriptionError,
       syncedAt: new Date().toISOString(),
     });
   } catch (error) {
