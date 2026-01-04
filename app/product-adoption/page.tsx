@@ -3,6 +3,11 @@ export const dynamic = "force-dynamic";
 
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { FEATURES } from "@/lib/features";
+import {
+  getAggregatedFeatureKey,
+  getDisplayFeatures,
+  getFeatureLabel,
+} from "@/lib/featureAggregation";
 import { fmtSec } from "@/lib/ui";
 
 type LastSeenRow = {
@@ -27,7 +32,7 @@ function toDay(d: Date) {
 }
 
 function labelForFeature(key: string) {
-  return FEATURES.find((f) => f.key === key)?.label ?? key;
+  return getFeatureLabel(key, FEATURES);
 }
 
 async function fetchAll<T>(
@@ -126,7 +131,7 @@ export default async function ProductAdoptionPage() {
   const locationTotals = new Map<string, number>();
 
   for (const r of lifetimeRows || []) {
-    const feature = r.feature_key || "other";
+    const feature = getAggregatedFeatureKey(r.feature_key || "other");
     const time = Number(r.time_sec || 0);
     featureTotals.set(feature, (featureTotals.get(feature) || 0) + time);
 
@@ -158,7 +163,8 @@ export default async function ProductAdoptionPage() {
   }
 
   const featureKeys = new Set<string>();
-  FEATURES.forEach((f) => featureKeys.add(f.key));
+  const displayFeatures = getDisplayFeatures(FEATURES);
+  displayFeatures.forEach((f) => featureKeys.add(f.key));
   featureTotals.forEach((_v, k) => featureKeys.add(k));
   adoptedUsersByFeature.forEach((_v, k) => featureKeys.add(k));
   adoptedLocationsByFeature.forEach((_v, k) => featureKeys.add(k));

@@ -1,8 +1,13 @@
-﻿import "server-only";
+import "server-only";
 export const dynamic = "force-dynamic";
 
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { FEATURES } from "@/lib/features";
+import {
+  getAggregatedFeatureKey,
+  getDisplayFeatures,
+  getFeatureLabel,
+} from "@/lib/featureAggregation";
 import { trendIcon, healthColor } from "@/lib/ui"; // Assurez-vous d'importer ces helpers si disponibles, sinon je les simulerai
 
 // --- Helpers ---
@@ -18,7 +23,7 @@ function fmtSec(sec: number) {
 }
 
 function labelForFeature(key: string) {
-  return FEATURES.find((f) => f.key === key)?.label ?? key;
+  return getFeatureLabel(key, FEATURES);
 }
 
 function toDay(d: Date) {
@@ -47,7 +52,7 @@ const MetricMini = ({ label, value, type = "text" }: { label: string; value: any
   <div className="flex flex-col gap-1 min-w-[80px]">
     <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">{label}</span>
     {type === "text" ? (
-         <span className="text-sm font-semibold text-zinc-200">{value ?? "â€”"}</span>
+         <span className="text-sm font-semibold text-zinc-200">{value ?? "???"}</span>
     ) : (
         <div className="flex items-center gap-2">
              <span className="text-sm font-semibold text-zinc-200">{value ?? 0}</span>
@@ -112,83 +117,113 @@ export default async function UserPage({
     .filter((p) => p >= 1 && p <= logsTotalPages)
     .sort((a, b) => a - b);
 
-  // --- ERROR STATE ---
-  if (!location_id) {
-    return (
-      <main className="min-h-screen flex items-center justify-center bg-black p-6 font-sans">
-        <div className="bg-zinc-900/40 border border-white/10 rounded-xl p-8 max-w-sm w-full text-center backdrop-blur-sm">
-          <h1 className="text-xl font-semibold text-white mb-3">Missing Context</h1>
-          <p className="text-sm text-zinc-400 mb-6">
-            The parameter <code className="text-blue-400 font-mono bg-blue-500/10 px-1 rounded">location_id</code> is missing from the URL.
-          </p>
-          <a
-            href="/locations"
-            className="inline-flex items-center justify-center w-full px-4 py-2 text-sm font-medium text-zinc-300 bg-white/5 border border-white/10 rounded-lg hover:bg-white/10 transition-colors"
-          >
-            â† Back to Locations
-          </a>
-        </div>
-      </main>
-    );
-  }
-
   // --- DATA FETCHING ---
 
   // 1) last seen
-  const { data: lastSeen } = await supabaseAdmin
+  const { data: lastSeenRows } = await supabaseAdmin
     .from("user_last_seen")
-    .select("last_seen_at, last_url")
+    .select("location_id, last_seen_at, last_url")
     .ilike("email", emailMatch)
-    .eq("location_id", location_id)
-    .maybeSingle();
+    .order("last_seen_at", { ascending: false });
 
-  const { data: health } = await supabaseAdmin.rpc("gocroco_user_health_v2", {
-    target_email: emailMatch,
-    target_location_id: location_id,
-    ref_day: null,
-  });
+  const locations = Array.from(
+    new Set((lastSeenRows || []).map((r) => String(r.location_id || "")).filter(Boolean))
+  );
 
-  // Metrics Logic
-  const score = typeof health?.health_score === "number" ? Math.round(health.health_score) : null;
-  const status = health?.status ?? "â€”";
-  const badgeColors = healthColor ? healthColor(health?.color) : { bg: "#333", fg: "#fff" }; // Fallback safe
+  const healthByLocation = new Map<string, any>();
+  await Promise.all(
+    locations.map(async (loc) => {
+      const { data: health } = await supabaseAdmin.rpc("gocroco_user_health_v2", {
+        target_email: emailMatch,
+        target_location_id: loc,
+        ref_day: null,
+      });
+      healthByLocation.set(loc, health);
+    })
+  );
+
+  const healthList = Array.from(healthByLocation.values());
+  const scores = healthList
+    .map((h) => (typeof h?.health_score === "number" ? Number(h.health_score) : null))
+    .filter((n): n is number => typeof n === "number");
+  const avgScore = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+
+  const worstHealth =
+    healthList
+      .filter((h) => typeof h?.health_score === "number")
+      .sort((a, b) => Number(a.health_score) - Number(b.health_score))[0] || null;
+
+  const status = worstHealth?.status ?? "n/a";
+  const badgeColors = healthColor ? healthColor(worstHealth?.color) : { bg: "#333", fg: "#fff" }; // Fallback safe
   
-  // Login Activity (Legacy logic mapped to score)
-  const loginDays7 = Number(health?.login?.days7 || 0);
-  const loginScore = Math.min(5, loginDays7); 
+  const loginDays7Max = Math.max(0, ...healthList.map((h) => Number(h?.login?.days7 || 0)));
+  const loginScore = Math.min(5, loginDays7Max); 
   
-  // Product Adoption (Legacy logic mapped to score/10)
-  const productAdoptionScore = health?.components?.product_adoption_score ?? null;
+  const adoptionScores = healthList
+    .map((h) => (typeof h?.components?.product_adoption_score === "number" ? Number(h.components.product_adoption_score) : null))
+    .filter((n): n is number => typeof n === "number");
+  const productAdoptionScore = adoptionScores.length
+    ? Math.round((adoptionScores.reduce((a, b) => a + b, 0) / adoptionScores.length) * 10) / 10
+    : null;
 
-  // Page Views (Mocked if not present in user_health)
-  const pageViewCount = health?.components?.page_views ?? "124";
+  const pageViewCount = healthList.reduce((acc, h) => {
+    const v = h?.components?.page_views;
+    return typeof v === "number" ? acc + v : acc;
+  }, 0);
 
   // 2) lifetime features
   const { data: lifetime } = await supabaseAdmin
     .from("user_feature_lifetime")
-    .select("feature_key, time_sec, last_seen_at")
+    .select("location_id, feature_key, time_sec, last_seen_at")
     .ilike("email", emailMatch)
-    .eq("location_id", location_id)
     .order("time_sec", { ascending: false });
 
   const totalLifetime = (lifetime || []).reduce(
     (acc, r) => acc + Number(r.time_sec || 0),
     0
   );
-  const topFeatures = (lifetime || []).slice(0, 5);
+  const featureTotals = new Map<string, number>();
+  for (const r of lifetime || []) {
+    const rawKey = r.feature_key || "other";
+    const featureKey = getAggregatedFeatureKey(rawKey);
+    featureTotals.set(featureKey, (featureTotals.get(featureKey) || 0) + Number(r.time_sec || 0));
+  }
+  const topFeatures = Array.from(featureTotals.entries())
+    .map(([feature_key, time_sec]) => ({ feature_key, time_sec }))
+    .sort((a, b) => b.time_sec - a.time_sec)
+    .slice(0, 5);
   
   const featureTimeByKey = new Map<string, number>();
   for (const r of lifetime || []) {
-    featureTimeByKey.set(r.feature_key, Number(r.time_sec || 0));
+    const rawKey = r.feature_key || "other";
+    const featureKey = getAggregatedFeatureKey(rawKey);
+    featureTimeByKey.set(featureKey, (featureTimeByKey.get(featureKey) || 0) + Number(r.time_sec || 0));
+  }
+
+  const perLocationLifetime = new Map<string, number>();
+  for (const r of lifetime || []) {
+    const loc = String(r.location_id || "");
+    if (!loc) continue;
+    perLocationLifetime.set(loc, (perLocationLifetime.get(loc) || 0) + Number(r.time_sec || 0));
+  }
+
+  const lastSeenByLocation = new Map<string, { last_seen_at: string | null; last_url: string | null }>();
+  for (const r of lastSeenRows || []) {
+    const loc = String(r.location_id || "");
+    if (!loc) continue;
+    if (!lastSeenByLocation.has(loc)) {
+      lastSeenByLocation.set(loc, { last_seen_at: r.last_seen_at ?? null, last_url: r.last_url ?? null });
+    }
   }
   
   // Adoption Logic
   const ADOPTED_THRESHOLD_SEC = 420; // Keeping your specific threshold
+  const displayFeatures = getDisplayFeatures(FEATURES);
   let adoptedCount = 0;
-  FEATURES.forEach(f => {
+  displayFeatures.forEach((f) => {
       if ((featureTimeByKey.get(f.key) || 0) >= ADOPTED_THRESHOLD_SEC) adoptedCount++;
   });
-  const adoptionPercentage = Math.round((adoptedCount / FEATURES.length) * 100);
+  const adoptionPercentage = Math.round((adoptedCount / displayFeatures.length) * 100);
 
   // 3) sparkline 14 jours
   const since = new Date();
@@ -198,7 +233,6 @@ export default async function UserPage({
     .from("feature_daily")
     .select("day, time_sec")
     .ilike("email", emailMatch)
-    .eq("location_id", location_id)
     .gte("day", toDay(since));
   
   if (dailyError) {
@@ -237,10 +271,10 @@ export default async function UserPage({
         {/* NAV BACK */}
         <div className="flex justify-between items-start mb-6">
             <a
-            href={`/locations/${encodeURIComponent(location_id)}`}
+            href={location_id ? `/locations/${encodeURIComponent(location_id)}` : "/locations"}
             className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-zinc-500 bg-white/5 border border-white/5 rounded-md hover:bg-white/10 hover:text-zinc-300 transition-all"
             >
-            <span>â†</span> Back to {location_id}
+            <span>←</span> Back to {location_id || "Locations"}
             </a>
         </div>
 
@@ -250,7 +284,7 @@ export default async function UserPage({
             <div className="flex items-center gap-2 text-xs text-zinc-500 mb-2">
               <span>User Profile</span>
               <span className="text-zinc-700">/</span>
-              <span className="text-zinc-200 font-mono">{location_id}</span>
+              <span className="text-zinc-200 font-mono">{locations.length} locations</span>
             </div>
             <h1 className="text-3xl font-bold text-white tracking-tight truncate mb-4">{email}</h1>
 
@@ -258,10 +292,9 @@ export default async function UserPage({
                 <div className="flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.25)]"></span>
                     <span className="text-zinc-200 font-medium">
-                         {lastSeen?.last_seen_at ? "Active recently" : "Inactive"}
+                         {(lastSeenRows && lastSeenRows.length) ? "Active recently" : "Inactive"}
                     </span>
                 </div>
-                <span className="text-zinc-700">â€¢</span>
                 <div className="text-zinc-500">
                     Lifetime: <span className="text-zinc-200 font-mono">{fmtSec(totalLifetime)}</span>
                 </div>
@@ -276,14 +309,14 @@ export default async function UserPage({
                  <MetricMini label="Page Views" value={pageViewCount} />
              </div>
 
-             {/* Main Health Score */}
-             <div className="text-right">
-                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1">Health Score</div>
-                  <div className="flex items-baseline gap-2 justify-end">
-                      <span className="text-3xl font-bold text-white leading-none">{score === null ? "â€”" : score}</span>
-                      <StatusBadge label={status} colorObj={badgeColors} />
-                  </div>
-             </div>
+            {/* Main Health Score */}
+              <div className="text-right">
+                    <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1">Health Score</div>
+                    <div className="flex items-baseline gap-2 justify-end">
+                        <span className="text-3xl font-bold text-white leading-none">{avgScore === null ? "N/A" : avgScore}</span>
+                        <StatusBadge label={status} colorObj={badgeColors} />
+                    </div>
+              </div>
           </div>
         </header>
 
@@ -330,7 +363,7 @@ export default async function UserPage({
                </div>
                
                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                  {FEATURES.map((f) => {
+                  {displayFeatures.map((f) => {
                     const used = featureTimeByKey.get(f.key) || 0;
                     const adopted = used >= ADOPTED_THRESHOLD_SEC;
                     return (
@@ -359,7 +392,7 @@ export default async function UserPage({
               <div className="shrink-0">
                   <SectionHeader 
                     title="Recent Activity Logs" 
-                    subtitle={`Last ${logsMaxTotal} events • Page ${logsPageSafe}/${logsTotalPages}`} 
+                    subtitle={`Last ${logsMaxTotal} events ? Page ${logsPageSafe}/${logsTotalPages}`} 
                   />
                   {/* Table Header */}
                   <div className="grid grid-cols-12 gap-4 pb-3 border-b border-white/5 text-[10px] uppercase tracking-wider text-zinc-600 font-semibold mb-2 px-2">
@@ -404,7 +437,7 @@ export default async function UserPage({
                         );
                       }
                       const params = new URLSearchParams();
-                      params.set("location_id", location_id);
+                      if (location_id) params.set("location_id", location_id);
                       params.set("logs_page", String(page));
                       const isActive = page === logsPageSafe;
                       links.push(
@@ -426,10 +459,10 @@ export default async function UserPage({
                   })()}
                   {(() => {
                     const prevParams = new URLSearchParams();
-                    prevParams.set("location_id", location_id);
+                    if (location_id) prevParams.set("location_id", location_id);
                     prevParams.set("logs_page", String(logsPrevPage));
                     const nextParams = new URLSearchParams();
-                    nextParams.set("location_id", location_id);
+                    if (location_id) nextParams.set("location_id", location_id);
                     nextParams.set("logs_page", String(logsNextPage));
                     const isFirst = logsPageSafe === 1;
                     const isLast = logsPageSafe === logsTotalPages;
@@ -468,7 +501,40 @@ export default async function UserPage({
 
           {/* RIGHT COL: TOP FEATURES & USAGE (1/3 width -> Span 4) */}
           <div className="lg:col-span-4 flex flex-col gap-6">
-            
+            {/* Locations */}
+            <Card>
+              <SectionHeader title="Locations" subtitle="All accounts" />
+              <div className="space-y-3">
+                {locations.length > 0 ? (
+                  locations.map((loc) => {
+                    const seen = lastSeenByLocation.get(loc);
+                    const total = perLocationLifetime.get(loc) || 0;
+                    return (
+                      <div key={loc} className="flex items-center justify-between">
+                        <div className="flex flex-col min-w-0">
+                          <a
+                            href={`/locations/${encodeURIComponent(loc)}`}
+                            className="text-sm font-mono text-zinc-300 truncate hover:text-white transition-colors"
+                          >
+                            {loc}
+                          </a>
+                          <div className="text-[10px] text-zinc-600">
+                            {seen?.last_seen_at ? new Date(seen.last_seen_at).toLocaleDateString() : "n/a"}
+                          </div>
+                        </div>
+                        <div className="text-[10px] font-mono text-zinc-400 bg-white/5 px-1.5 py-0.5 rounded">
+                          {fmtSec(total)}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-sm text-zinc-600 italic py-2 text-center">
+                    No locations found.
+                  </div>
+                )}
+              </div>
+            </Card>
             {/* Top Features */}
             <Card>
               <SectionHeader title="Top Features" subtitle="Lifetime Usage" />
@@ -507,7 +573,7 @@ export default async function UserPage({
               </div>
 
               <div className="overflow-y-auto pr-1 -mr-2 space-y-1">
-                  {FEATURES.map((f) => {
+                  {displayFeatures.map((f) => {
                       const time = featureTimeByKey.get(f.key) || 0;
                       // Calculate width relative to the top feature for the visual bar
                       const topTime = topFeatures[0]?.time_sec || 1; 
@@ -524,7 +590,7 @@ export default async function UserPage({
                               <div className="relative z-10 flex justify-between items-center">
                                   <span className="text-sm text-zinc-300">{f.label}</span>
                                   <span className={`text-xs font-mono ${time > 0 ? "text-zinc-500" : "text-zinc-700"}`}>
-                                      {time > 0 ? fmtSec(time) : "â€”"}
+                                      {time > 0 ? fmtSec(time) : "N/A"}
                                   </span>
                               </div>
                           </div>
@@ -539,6 +605,11 @@ export default async function UserPage({
     </main>
   );
 }
+
+
+
+
+
 
 
 

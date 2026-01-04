@@ -3,15 +3,50 @@ export const dynamic = "force-dynamic";
 
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { FEATURES } from "@/lib/features";
+import {
+  getAggregatedFeatureKey,
+  getDisplayFeatures,
+  getFeatureLabel,
+} from "@/lib/featureAggregation";
 import { fmtSec, healthColor, trendIcon, riskTags } from "@/lib/ui";
+import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
+import SyncLocationForm from "./SyncLocationForm";
 
 // --- Helpers ---
 function labelForFeature(key: string) {
-  return FEATURES.find((x) => x.key === key)?.label ?? key;
+  return getFeatureLabel(key, FEATURES);
 }
 
 function toDay(d: Date) {
   return d.toISOString().slice(0, 10);
+}
+
+function pickLocationName(profile: any, fallback: string) {
+  if (!profile) return fallback;
+  return (
+    profile.name ||
+    profile?.location?.name ||
+    profile?.business?.name ||
+    profile?.companyName ||
+    fallback
+  );
+}
+
+function formatSubscription(subscription: any) {
+  if (!subscription) return null;
+  const plan =
+    subscription.planName ||
+    subscription?.plan?.name ||
+    subscription?.plan?.id ||
+    subscription?.planId;
+  const status = subscription.status || subscription?.subscriptionStatus;
+  const mrr = subscription.mrr || subscription?.mrrAmount || subscription?.amount;
+  return {
+    plan,
+    status,
+    mrr,
+  };
 }
 
 // --- CONSTANTS DE STYLE (Linear Theme) ---
@@ -171,6 +206,64 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
   const location_id = decodeURIComponent(p.location_id);
 
   // --- DATA FETCHING ---
+  async function syncLocationAction(
+    _prevState: { ok: boolean | null; message: string | null },
+    formData: FormData
+  ) {
+    "use server";
+    const companyId = String(formData.get("company_id") || "");
+    const locationId = String(formData.get("location_id") || "");
+    if (!locationId) {
+      return { ok: false, message: "Missing location id." };
+    }
+
+    const headerList = await headers();
+    const host = headerList.get("x-forwarded-host") || headerList.get("host");
+    const proto = headerList.get("x-forwarded-proto") || "https";
+    if (!host) {
+      return { ok: false, message: "Missing host for sync." };
+    }
+
+    const baseUrl = `${proto}://${host}`;
+    const payload = companyId ? { companyId, locationId } : { locationId };
+
+    try {
+      const res = await fetch(`${baseUrl}/api/internal/external/sync-location`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(process.env.INTERNAL_API_KEY
+            ? { "x-internal-key": process.env.INTERNAL_API_KEY }
+            : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        return { ok: false, message: data?.error || "Sync failed." };
+      }
+
+      revalidatePath(`/locations/${encodeURIComponent(locationId)}`);
+      return { ok: true, message: "Sync completed." };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Sync failed.";
+      return { ok: false, message };
+    }
+  }
+
+  const { data: locationRow, error: locationError } = await supabaseAdmin
+    .from("ghl_locations")
+    .select("company_id, profile, subscription, last_synced_at")
+    .eq("location_id", location_id)
+    .maybeSingle();
+
+  if (locationError) return <ErrorState msg={locationError.message} id={location_id} />;
+
+  const locationProfile = locationRow?.profile || null;
+  const locationSubscription = locationRow?.subscription || null;
+  const locationName = pickLocationName(locationProfile, location_id);
+  const subscriptionSummary = formatSubscription(locationSubscription);
   
   // 0) Health
   const { data: health } = await supabaseAdmin.rpc("gocroco_location_health_v2", {
@@ -198,7 +291,9 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
 
   const featureTotals = new Map<string, number>();
   for (const r of lifetimeRows || []) {
-    featureTotals.set(r.feature_key, (featureTotals.get(r.feature_key) || 0) + Number(r.time_sec || 0));
+    const rawKey = r.feature_key || "other";
+    const featureKey = getAggregatedFeatureKey(rawKey);
+    featureTotals.set(featureKey, (featureTotals.get(featureKey) || 0) + Number(r.time_sec || 0));
   }
 
   const topFeatures = Array.from(featureTotals.entries())
@@ -211,15 +306,18 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
   // Adoption calculation
   const featureTimeByKey = new Map<string, number>();
   for (const r of lifetimeRows || []) {
-    featureTimeByKey.set(r.feature_key, Number(r.time_sec || 0));
+    const rawKey = r.feature_key || "other";
+    const featureKey = getAggregatedFeatureKey(rawKey);
+    featureTimeByKey.set(featureKey, (featureTimeByKey.get(featureKey) || 0) + Number(r.time_sec || 0));
   }
   const ADOPTED_THRESHOLD_SEC = 3600;
   
+  const displayFeatures = getDisplayFeatures(FEATURES);
   let adoptedCount = 0;
-  FEATURES.forEach(f => {
+  displayFeatures.forEach((f) => {
       if ((featureTimeByKey.get(f.key) || 0) >= ADOPTED_THRESHOLD_SEC) adoptedCount++;
   });
-  const adoptionPercentage = Math.round((adoptedCount / FEATURES.length) * 100);
+  const adoptionPercentage = Math.round((adoptedCount / displayFeatures.length) * 100);
 
   // B) Users list
   const { data: usersSeen, error: e2 } = await supabaseAdmin
@@ -281,7 +379,7 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
   const enriched = await Promise.all(
     users.slice(0, ENRICH_USERS).map(async (u) => {
       const [{ data: uh }, { data: ur }] = await Promise.all([
-        supabaseAdmin.rpc("gocroco_user_health", {
+        supabaseAdmin.rpc("gocroco_user_health_v2", {
           target_email: u.email,
           target_location_id: location_id,
           ref_day: null,
@@ -316,15 +414,24 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
               <span>/</span>
               <span style={{ color: THEME.textMain }}>{location_id}</span>
             </nav>
-            <h1 style={{ fontSize: "32px", fontWeight: 700, color: "#fff", margin: 0, letterSpacing: "-0.02em" }}>{location_id}</h1>
+            <h1 style={{ fontSize: "32px", fontWeight: 700, color: "#fff", margin: 0, letterSpacing: "-0.02em" }}>{locationName}</h1>
+            <div style={{ fontSize: "12px", color: THEME.textMuted, marginTop: "6px" }}>{location_id}</div>
             <div style={{ display: "flex", alignItems: "center", gap: "16px", marginTop: "12px", fontSize: "14px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: THEME.accent, boxShadow: `0 0 8px ${THEME.accent}40` }}></span>
                 <span style={{ color: THEME.textMain, fontWeight: 500 }}>{users.length} Active Users</span>
               </div>
-              <span style={{ color: THEME.textDark }}>•</span>
+              <span style={{ color: THEME.textDark }}>|</span>
               <div style={{ color: THEME.textMuted }}>
                 Lifetime: <span style={{ color: THEME.textMain, fontFamily: THEME.fontMono }}>{fmtSec(totalLifetime)}</span>
+              </div>
+              <span style={{ color: THEME.textDark }}>|</span>
+              <div style={{ color: THEME.textMuted }}>
+                Subscription:{" "}
+                <span style={{ color: THEME.textMain, fontFamily: THEME.fontMono }}>
+                  {subscriptionSummary?.plan || "n/a"}
+                </span>
+                {subscriptionSummary?.status ? ` (${subscriptionSummary.status})` : ""}
               </div>
             </div>
           </div>
@@ -364,6 +471,24 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
             >
               Users →
             </a>
+            <SyncLocationForm
+              action={syncLocationAction}
+              companyId={locationRow?.company_id || ""}
+              locationId={location_id}
+              disabled={!location_id}
+              buttonStyle={{
+                padding: "8px 16px",
+                backgroundColor: "transparent",
+                color: THEME.textMain,
+                fontSize: "13px",
+                fontWeight: 600,
+                borderRadius: "8px",
+                border: `1px solid ${THEME.border}`,
+                height: "32px",
+                display: "inline-flex",
+                alignItems: "center",
+              }}
+            />
           </div>
         </header>
 
@@ -476,7 +601,7 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
                </div>
                
                <div className="adoption-grid">
-                  {FEATURES.map((f) => {
+                  {displayFeatures.map((f) => {
                     const used = featureTimeByKey.get(f.key) || 0;
                     const adopted = used >= ADOPTED_THRESHOLD_SEC;
                     return (
@@ -558,7 +683,7 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
 
               <div className="custom-scroll" style={{ overflowY: "auto", paddingRight: "4px" }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                    {FEATURES.map((f) => {
+                    {displayFeatures.map((f) => {
                         const time = featureTimeByKey.get(f.key) || 0;
                         const barWidth = Math.min(100, (time / (topFeatures[0]?.time_sec || 1)) * 100);
                         return (
@@ -598,3 +723,6 @@ function ErrorState({ msg, id }: { msg: string; id: string }) {
     </main>
   );
 }
+
+
+

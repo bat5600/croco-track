@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { getLocationAccessToken, TokenError } from "@/lib/ghlTokens";
-import { getLocationProfile, getLocationSubscription } from "@/lib/ghlService";
+import { TokenError } from "@/lib/ghlTokens";
+import { syncLocation } from "@/lib/ghlSync";
 
 function ensureInternalAuth(req: Request) {
   const key = process.env.INTERNAL_API_KEY;
@@ -21,45 +20,22 @@ export async function POST(req: Request) {
   if (authError) return authError;
 
   const body = await req.json().catch(() => null);
-  const companyId = body?.companyId;
+  const companyId = body?.companyId ?? null;
   const locationId = body?.locationId;
-  if (!companyId || !locationId) {
+  if (!locationId) {
     return NextResponse.json(
-      { ok: false, error: "companyId and locationId required" },
+      { ok: false, error: "locationId required" },
       { status: 400 }
     );
   }
 
   try {
-    const { token } = await getLocationAccessToken({ companyId, locationId });
-    const [profile, subscription] = await Promise.all([
-      getLocationProfile(locationId, token),
-      getLocationSubscription(locationId, token),
-    ]);
-
-    const { error } = await supabaseAdmin.from("ghl_locations").upsert(
-      {
-        company_id: companyId,
-        location_id: locationId,
-        profile,
-        subscription,
-        last_synced_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "company_id,location_id" }
-    );
-
-    if (error) {
-      return NextResponse.json(
-        { ok: false, error: error.message },
-        { status: 500 }
-      );
-    }
+    const result = await syncLocation({ companyId, locationId });
 
     return NextResponse.json({
       ok: true,
-      companyId,
-      locationId,
+      companyId: result.companyId,
+      locationId: result.locationId,
       syncedAt: new Date().toISOString(),
     });
   } catch (error) {

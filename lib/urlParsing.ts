@@ -1,6 +1,11 @@
 import { FEATURES } from "@/lib/features";
 
-const FEATURE_SET = new Set(FEATURES.map(f => f.key));
+const FEATURE_SET = new Set(FEATURES.map((f) => f.key));
+const FEATURE_ALIASES: Record<string, string> = {
+  "page-builder": "funnels-websites",
+  "quiz-builder-v2": "survey-builder",
+  "form-builder-v2": "form-builder",
+};
 
 type ParsedFeature = {
   feature_key: string;
@@ -21,6 +26,11 @@ export function parseFeatureFromUrl(url: string): ParsedFeature | null {
       return { feature_key: feature, feature_raw: null };
     }
 
+    const aliasTarget = FEATURE_ALIASES[feature];
+    if (aliasTarget) {
+      return { feature_key: aliasTarget, feature_raw: null };
+    }
+
     return { feature_key: "other", feature_raw: feature };
   } catch {
     return null;
@@ -29,4 +39,16 @@ export function parseFeatureFromUrl(url: string): ParsedFeature | null {
 
 export function extractFeatureKey(url: string): string | null {
   return parseFeatureFromUrl(url)?.feature_key ?? null;
+}
+
+export function extractLocationIdFromUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split("/").filter(Boolean);
+    const locIndex = parts.indexOf("location");
+    if (locIndex === -1) return null;
+    return parts[locIndex + 1] ?? null;
+  } catch {
+    return null;
+  }
 }

@@ -8,6 +8,12 @@ type LocationTokenResult = {
   cached: boolean;
 };
 
+type AgencyTokenResult = {
+  token: string;
+  expiresAt: string | null;
+  refreshed: boolean;
+};
+
 export class TokenError extends Error {
   status: number;
 
@@ -26,6 +32,60 @@ function isTokenValid(expiresAt?: string | null) {
 function expiresAtFromNow(seconds?: number, fallbackSeconds = 900) {
   const value = seconds ?? fallbackSeconds;
   return new Date(Date.now() + value * 1000).toISOString();
+}
+
+export async function getAgencyAccessToken(companyId: string): Promise<AgencyTokenResult> {
+  const { data: agency, error: agencyError } = await supabaseAdmin
+    .from("ghl_agencies")
+    .select(
+      "company_id, agency_access_token_enc, agency_refresh_token_enc, agency_token_expires_at"
+    )
+    .eq("company_id", companyId)
+    .maybeSingle();
+
+  if (agencyError) {
+    throw new TokenError(500, agencyError.message);
+  }
+
+  if (!agency?.agency_access_token_enc) {
+    throw new TokenError(404, "Agency token not found");
+  }
+
+  let agencyAccessToken = decryptToken(agency.agency_access_token_enc);
+  if (isTokenValid(agency.agency_token_expires_at)) {
+    return {
+      token: agencyAccessToken,
+      expiresAt: agency.agency_token_expires_at,
+      refreshed: false,
+    };
+  }
+
+  if (!agency.agency_refresh_token_enc) {
+    throw new TokenError(400, "Agency refresh token missing");
+  }
+
+  const agencyRefreshToken = decryptToken(agency.agency_refresh_token_enc);
+  const refreshed = await refreshAgencyToken(agencyRefreshToken);
+  agencyAccessToken = refreshed.access_token;
+
+  await supabaseAdmin.from("ghl_agencies").upsert(
+    {
+      company_id: companyId,
+      agency_access_token_enc: encryptToken(refreshed.access_token),
+      agency_refresh_token_enc: refreshed.refresh_token
+        ? encryptToken(refreshed.refresh_token)
+        : agency.agency_refresh_token_enc,
+      agency_token_expires_at: expiresAtFromNow(refreshed.expires_in, 3600),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "company_id" }
+  );
+
+  return {
+    token: agencyAccessToken,
+    expiresAt: expiresAtFromNow(refreshed.expires_in, 3600),
+    refreshed: true,
+  };
 }
 
 export async function getLocationAccessToken(params: {
@@ -58,45 +118,7 @@ export async function getLocationAccessToken(params: {
     };
   }
 
-  const { data: agency, error: agencyError } = await supabaseAdmin
-    .from("ghl_agencies")
-    .select(
-      "company_id, agency_access_token_enc, agency_refresh_token_enc, agency_token_expires_at"
-    )
-    .eq("company_id", companyId)
-    .maybeSingle();
-
-  if (agencyError) {
-    throw new TokenError(500, agencyError.message);
-  }
-
-  if (!agency?.agency_access_token_enc) {
-    throw new TokenError(404, "Agency token not found");
-  }
-
-  let agencyAccessToken = decryptToken(agency.agency_access_token_enc);
-  if (!isTokenValid(agency.agency_token_expires_at)) {
-    if (!agency.agency_refresh_token_enc) {
-      throw new TokenError(400, "Agency refresh token missing");
-    }
-
-    const agencyRefreshToken = decryptToken(agency.agency_refresh_token_enc);
-    const refreshed = await refreshAgencyToken(agencyRefreshToken);
-    agencyAccessToken = refreshed.access_token;
-
-    await supabaseAdmin.from("ghl_agencies").upsert(
-      {
-        company_id: companyId,
-        agency_access_token_enc: encryptToken(refreshed.access_token),
-        agency_refresh_token_enc: refreshed.refresh_token
-          ? encryptToken(refreshed.refresh_token)
-          : agency.agency_refresh_token_enc,
-        agency_token_expires_at: expiresAtFromNow(refreshed.expires_in, 3600),
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "company_id" }
-    );
-  }
+  const { token: agencyAccessToken } = await getAgencyAccessToken(companyId);
 
   const locationToken = await exchangeLocationToken({
     companyId,

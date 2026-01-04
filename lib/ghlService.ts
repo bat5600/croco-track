@@ -29,15 +29,24 @@ async function fetchGhlJson<T>(path: string, accessToken: string): Promise<T> {
 }
 
 export async function getLocationProfile(locationId: string, accessToken: string) {
-  return fetchGhlJson<unknown>(`/locations/${locationId}`, accessToken);
+  return fetchGhlJson<unknown>(
+    `/locations/${encodeURIComponent(locationId)}`,
+    accessToken
+  );
 }
 
 export async function getLocationSubscription(
   locationId: string,
+  companyId: string,
   accessToken: string
 ) {
+  const params = new URLSearchParams();
+  if (companyId) params.set("companyId", companyId);
+  const query = params.toString();
   return fetchGhlJson<unknown>(
-    `/saas/location/${locationId}/subscription`,
+    `/saas/get-saas-subscription/${encodeURIComponent(locationId)}${
+      query ? `?${query}` : ""
+    }`,
     accessToken
   );
 }

@@ -5,6 +5,7 @@ function corsHeaders(origin: string | null) {
   const allowed = new Set([
     "https://pro.crococlick.com",
     "https://app.crococlick.com",
+    "https://app.gohighlevel.com",
     "http://localhost:3000",
     "http://localhost:3001",
   ]);

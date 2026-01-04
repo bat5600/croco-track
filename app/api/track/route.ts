@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { parseFeatureFromUrl } from "@/lib/urlParsing";
+import { extractLocationIdFromUrl, parseFeatureFromUrl } from "@/lib/urlParsing";
+import { syncLocation } from "@/lib/ghlSync";
 
 const ALLOWED_ORIGINS = new Set([
   "https://pro.crococlick.com",
@@ -34,11 +35,13 @@ export async function POST(req: Request) {
     );
   }
 
-  const parsed = parseFeatureFromUrl(String(body.url));
+  const url = String(body.url);
+  const parsed = parseFeatureFromUrl(url);
+  const locationId = extractLocationIdFromUrl(url);
 
   const { error } = await supabaseAdmin.from("events").insert({
     email: String(body.email),
-    url: String(body.url),
+    url,
     ts: body.ts ? new Date(body.ts).toISOString() : new Date().toISOString(),
     feature_key: parsed?.feature_key ?? null,
     feature_raw: parsed?.feature_raw ?? null,
@@ -49,6 +52,22 @@ export async function POST(req: Request) {
       { error: error.message },
       { status: 500, headers }
     );
+  }
+
+  if (locationId) {
+    try {
+      const { data: existing } = await supabaseAdmin
+        .from("ghl_locations")
+        .select("location_id")
+        .eq("location_id", locationId)
+        .maybeSingle();
+
+      if (!existing) {
+        await syncLocation({ locationId });
+      }
+    } catch {
+      // Best-effort sync; tracking should not fail because of GHL.
+    }
   }
 
   return NextResponse.json({ ok: true }, { headers });

@@ -7,7 +7,6 @@ export async function GET(req: Request) {
   const state = useState ? crypto.randomBytes(16).toString("hex") : undefined;
 
   const url = buildInstallUrl(state);
-  console.log("GHL install redirect URL:", url);
 
   const res = NextResponse.redirect(url);
 
