@@ -33,6 +33,7 @@ export async function exchangeCodeForAgencyToken(code: string) {
 
   const body = new URLSearchParams({
     grant_type: "authorization_code",
+    user_type: "Company",
     code,
     client_id: clientId,
     client_secret: clientSecret,
