@@ -57,10 +57,18 @@ export async function syncLocation(params: { locationId: string; companyId?: str
     profileFromAgency = resolved.profile;
   }
 
-  const { token } = await getLocationAccessToken({ companyId, locationId });
+  const { token: locationToken } = await getLocationAccessToken({ companyId, locationId });
+  let agencyToken: string | null = null;
+  try {
+    const agencyResult = await getAgencyAccessToken(companyId);
+    agencyToken = agencyResult.token;
+  } catch {
+    agencyToken = null;
+  }
+
   const [profile, subscription] = await Promise.all([
-    profileFromAgency ?? getLocationProfile(locationId, token),
-    getLocationSubscription(locationId, companyId, token),
+    profileFromAgency ?? getLocationProfile(locationId, locationToken),
+    getLocationSubscription(locationId, companyId, agencyToken || locationToken),
   ]);
 
   const { error } = await supabaseAdmin.from("ghl_locations").upsert(
