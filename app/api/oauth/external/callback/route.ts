@@ -28,7 +28,9 @@ export async function GET(req: Request) {
   const cookieStore = await cookies(); // <- IMPORTANT: await
   const expectedState = cookieStore.get("ghl_oauth_state")?.value;
 
-  const allowNoState = process.env.GHL_ALLOW_OAUTH_NO_STATE === "true";
+  const allowNoState =
+    process.env.GHL_ALLOW_OAUTH_NO_STATE === "true" ||
+    process.env.GHL_OAUTH_USE_STATE === "false";
   if ((!expectedState || !state || state !== expectedState) && !allowNoState) {
     return NextResponse.json({ ok: false, error: "Invalid state" }, { status: 400 });
   }
