@@ -6,10 +6,8 @@ function getHeaders(accessToken: string) {
   headers.set("Authorization", `Bearer ${accessToken}`);
   headers.set("Accept", "application/json");
 
-  const version = process.env.GHL_API_VERSION;
-  if (version) {
-    headers.set("Version", version);
-  }
+  const version = process.env.GHL_API_VERSION || "2021-07-28";
+  headers.set("Version", version);
 
   return headers;
 }
