@@ -13,9 +13,11 @@ const FEATURE_GROUPS: Array<{ key: string; label: string; members: string[] }> =
 const FEATURE_ALIASES: Record<string, string> = {
   "page-builder": "funnels-websites",
   "quiz-builder-v2": "survey-builder",
+  "quiz-builder": "survey-builder",
   "form-builder-v2": "form-builder",
   workflow: "automation",
   emails: "email",
+  analytics: "dashboard",
 };
 
 const MEMBER_TO_GROUP = new Map<string, string>();

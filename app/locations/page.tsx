@@ -2,11 +2,17 @@ import "server-only";
 export const dynamic = "force-dynamic";
 
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { fmtSec, healthColor, trendIcon } from "@/lib/ui";
+import { fmtSec, healthColor } from "@/lib/ui";
 
 // --- Types & Helpers ---
 
-type Row = { location_id: string; last_seen_at: string | null };
+type Row = { location_id: string; last_seen_at: string | null; email: string | null };
+type HealthRow = {
+  location_id: string;
+  health_score: number;
+  score_day: string;
+  computed_at: string;
+};
 
 type ViewRow = {
   location_id: string;
@@ -15,13 +21,13 @@ type ViewRow = {
   total_sec: number;
   total_pct: number;
   login_days_7: number;
-  login_days_30: number;
   login_activity_pct: number;
   health_score: number | null;
   health_status: string;
   health_pct: number;
   health_color: string | undefined;
-  trend: string | undefined;
+  score_day: string | null;
+  computed_at: string | null;
 };
 
 function toPct(n: number, max: number) {
@@ -38,6 +44,29 @@ function pickLocationName(profile: any, fallback: string) {
     profile?.companyName ||
     fallback
   );
+}
+
+function scoreToStatus(score: number | null) {
+  if (score === null) return "Not computed";
+  if (score >= 80) return "Thriving";
+  if (score >= 60) return "Healthy";
+  if (score >= 45) return "Steady";
+  return "At-risk";
+}
+
+function scoreToColor(score: number | null): string | undefined {
+  if (score === null) return undefined;
+  if (score >= 80) return "dark_green";
+  if (score >= 60) return "light_green";
+  if (score >= 45) return "yellow";
+  return "red";
+}
+
+function buildPageUrl(params: URLSearchParams, offset: number) {
+  const next = new URLSearchParams(params);
+  next.set("offset", String(offset));
+  const qs = next.toString();
+  return `/locations${qs ? `?${qs}` : ""}`;
 }
 
 // --- Components ---
@@ -70,47 +99,194 @@ const Select = (props: React.SelectHTMLAttributes<HTMLSelectElement>) => (
 
 export default async function LocationsPage({ searchParams }: { searchParams?: any }) {
   const sp = await searchParams || {};
-  const limit = Math.min(Number(sp.limit || 1000), 3000);
-  const q = String(sp.q || "").trim().toLowerCase();
-  const healthFilter = String(sp.health || "").trim().toLowerCase();
-  const sort = String(sp.sort || "last_seen");
+  const limit = Math.min(Math.max(Number(sp.limit || 50), 1), 200);
+  const offset = Math.max(Number(sp.offset || 0), 0);
+  const qRaw = String(sp.q || "");
+  const q = qRaw.trim().toLowerCase();
+  const riskOnly = String(sp.risk || "") === "1";
+  const sortDir = (sp.sort === "asc" || sp.sort === "desc")
+    ? sp.sort
+    : (riskOnly ? "asc" : "desc");
 
-  // 1) discover locations from user_last_seen
-  const { data: rows, error } = await supabaseAdmin
-    .from("user_last_seen")
-    .select("location_id, last_seen_at")
-    .order("last_seen_at", { ascending: false })
-    .limit(limit);
+  // 1) load scored locations (paged) from location_health_latest
+  let scoredCount = 0;
+  {
+    let countQuery = supabaseAdmin
+      .from("location_health_latest")
+      .select("location_id", { count: "exact", head: true });
+    if (riskOnly) countQuery = countQuery.lt("health_score", 45);
+    const { count, error: countError } = await countQuery;
+    if (countError) {
+      return (
+        <main className="min-h-screen bg-black text-white p-10 flex items-center justify-center">
+          <div className="bg-red-950/20 border border-red-900/50 p-6 rounded-xl max-w-lg backdrop-blur-sm">
+             <h1 className="text-xl font-bold text-red-400 mb-2">Error loading health scores</h1>
+             <pre className="text-xs text-red-300/70 whitespace-pre-wrap font-mono">{countError.message}</pre>
+          </div>
+        </main>
+      );
+    }
+    scoredCount = count || 0;
+  }
 
-  if (error) {
+  let pageQuery = supabaseAdmin
+    .from("location_health_latest")
+    .select("location_id, health_score, score_day, computed_at")
+    .order("health_score", { ascending: sortDir === "asc" })
+    .order("location_id", { ascending: true })
+    .range(offset, offset + limit - 1);
+  if (riskOnly) pageQuery = pageQuery.lt("health_score", 45);
+  const { data: scoredRows, error: scoredError } = await pageQuery;
+
+  if (scoredError) {
     return (
       <main className="min-h-screen bg-black text-white p-10 flex items-center justify-center">
         <div className="bg-red-950/20 border border-red-900/50 p-6 rounded-xl max-w-lg backdrop-blur-sm">
-           <h1 className="text-xl font-bold text-red-400 mb-2">Error loading locations</h1>
-           <pre className="text-xs text-red-300/70 whitespace-pre-wrap font-mono">{error.message}</pre>
+           <h1 className="text-xl font-bold text-red-400 mb-2">Error loading health scores</h1>
+           <pre className="text-xs text-red-300/70 whitespace-pre-wrap font-mono">{scoredError.message}</pre>
         </div>
       </main>
     );
   }
 
-  // aggregate max last_seen per location
-  const agg = new Map<string, Row>();
-  for (const r of rows || []) {
+  const scored = (scoredRows || []) as HealthRow[];
+  const scoredIds = scored.map((r) => r.location_id);
+  const healthById = new Map(scored.map((r) => [r.location_id, r]));
+
+  let missingIds: string[] = [];
+  let missingCount: number | null = null;
+  const needMissing = !riskOnly && (offset + limit) > scoredCount;
+  if (needMissing) {
+    const { data: allLocations, error: allLocationsError } = await supabaseAdmin
+      .from("ghl_locations")
+      .select("location_id");
+    if (allLocationsError) {
+      return (
+        <main className="min-h-screen bg-black text-white p-10 flex items-center justify-center">
+          <div className="bg-red-950/20 border border-red-900/50 p-6 rounded-xl max-w-lg backdrop-blur-sm">
+             <h1 className="text-xl font-bold text-red-400 mb-2">Error loading locations</h1>
+             <pre className="text-xs text-red-300/70 whitespace-pre-wrap font-mono">{allLocationsError.message}</pre>
+          </div>
+        </main>
+      );
+    }
+
+    const { data: allHealthIds, error: allHealthError } = await supabaseAdmin
+      .from("location_health_latest")
+      .select("location_id");
+    if (allHealthError) {
+      return (
+        <main className="min-h-screen bg-black text-white p-10 flex items-center justify-center">
+          <div className="bg-red-950/20 border border-red-900/50 p-6 rounded-xl max-w-lg backdrop-blur-sm">
+             <h1 className="text-xl font-bold text-red-400 mb-2">Error loading health scores</h1>
+             <pre className="text-xs text-red-300/70 whitespace-pre-wrap font-mono">{allHealthError.message}</pre>
+          </div>
+        </main>
+      );
+    }
+
+    const healthIdSet = new Set((allHealthIds || []).map((r: { location_id: string }) => r.location_id));
+    const allLocationIds = (allLocations || [])
+      .map((r: { location_id: string }) => String(r.location_id || ""))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+    missingIds = allLocationIds.filter((id) => !healthIdSet.has(id));
+    missingCount = missingIds.length;
+  }
+
+  const remaining = Math.max(0, limit - scoredIds.length);
+  let missingPage: string[] = [];
+  if (remaining > 0 && !riskOnly) {
+    const missingOffset = Math.max(0, offset - scoredCount);
+    missingPage = missingIds.slice(missingOffset, missingOffset + remaining);
+  }
+
+  const pageLocationIds = [...scoredIds, ...missingPage];
+
+  if (!pageLocationIds.length) {
+    return (
+      <main className="min-h-screen bg-black text-zinc-400 font-sans p-6 md:p-10 selection:bg-zinc-800">
+        <div className="max-w-[1600px] mx-auto space-y-8">
+          <header className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-white/5 pb-8">
+            <div>
+              <h1 className="text-3xl font-bold text-white tracking-tight mb-2">Locations</h1>
+              <div className="flex items-center gap-2 text-sm text-zinc-500">
+                 <span className="bg-white/5 px-2 py-0.5 rounded text-zinc-300 font-mono">0</span>
+                 <span>locations found</span>
+              </div>
+            </div>
+          </header>
+          <div className="bg-zinc-900/40 border border-white/5 rounded-xl p-10 text-center text-zinc-500 italic">
+            No locations match the current filters.
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // 2) last seen + login activity (7d via gocroco_user_health_v2)
+  const { data: lastSeenRows, error: lastSeenError } = await supabaseAdmin
+    .from("user_last_seen")
+    .select("location_id, last_seen_at, email")
+    .in("location_id", pageLocationIds);
+
+  if (lastSeenError) {
+    return (
+      <main className="min-h-screen bg-black text-white p-10 flex items-center justify-center">
+        <div className="bg-red-950/20 border border-red-900/50 p-6 rounded-xl max-w-lg backdrop-blur-sm">
+           <h1 className="text-xl font-bold text-red-400 mb-2">Error loading last seen data</h1>
+           <pre className="text-xs text-red-300/70 whitespace-pre-wrap font-mono">{lastSeenError.message}</pre>
+        </div>
+      </main>
+    );
+  }
+
+  const lastSeenByLocation = new Map<string, Row>();
+  const userEmailsByLocation = new Map<string, Set<string>>();
+  for (const r of lastSeenRows || []) {
     const id = String(r.location_id || "");
     if (!id) continue;
-    const prev = agg.get(id);
-    if (!prev) agg.set(id, { location_id: id, last_seen_at: r.last_seen_at ?? null });
+    const prev = lastSeenByLocation.get(id);
+    if (!prev) lastSeenByLocation.set(id, { location_id: id, last_seen_at: r.last_seen_at ?? null });
     else {
       const a = prev.last_seen_at ? new Date(prev.last_seen_at).getTime() : 0;
       const b = r.last_seen_at ? new Date(r.last_seen_at).getTime() : 0;
       if (b > a) prev.last_seen_at = r.last_seen_at ?? prev.last_seen_at;
     }
+
+    const email = r.email ? String(r.email) : "";
+    if (email) {
+      if (!userEmailsByLocation.has(id)) userEmailsByLocation.set(id, new Set());
+      userEmailsByLocation.get(id)?.add(email);
+    }
   }
 
-  const locations = Array.from(agg.values());
+  const MAX_USERS_PER_LOCATION = 50;
+  const loginDaysByLocation = new Map<string, number>();
+  await Promise.all(
+    pageLocationIds.map(async (locationId) => {
+      const emails = Array.from(userEmailsByLocation.get(locationId) || []).slice(0, MAX_USERS_PER_LOCATION);
+      if (!emails.length) {
+        loginDaysByLocation.set(locationId, 0);
+        return;
+      }
+      const healthList = await Promise.all(
+        emails.map(async (email) => {
+          const { data: health } = await supabaseAdmin.rpc("gocroco_user_health_v2", {
+            target_email: email,
+            target_location_id: locationId,
+            ref_day: null,
+          });
+          return health;
+        })
+      );
+      const maxDays = Math.max(0, ...healthList.map((h) => Number(h?.login?.days7 || 0)));
+      loginDaysByLocation.set(locationId, maxDays);
+    })
+  );
 
-  // 2) lifetime totals by location
-  const ids = locations.map((x) => x.location_id);
+  // 3) lifetime totals by location
+  const ids = pageLocationIds;
   const { data: lifetimeRows, error: e2 } = await supabaseAdmin
     .from("user_feature_lifetime")
     .select("location_id, time_sec")
@@ -136,7 +312,7 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
 
   const maxTotal = Math.max(0, ...Array.from(totals.values()));
 
-  // 2b) resolve display names from ghl_locations (fallback to id)
+  // 4) resolve display names from ghl_locations (fallback to id)
   const nameMap = new Map<string, string>();
   if (ids.length) {
     const { data: locationRows } = await supabaseAdmin
@@ -150,61 +326,50 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
     }
   }
 
-  // 3) health enrichment (first N locations)
-  const ENRICH_LIMIT = 40;
-  const healthMap = new Map<string, any>();
-
-  await Promise.all(
-    locations.slice(0, ENRICH_LIMIT).map(async (l) => {
-      const { data } = await supabaseAdmin.rpc("gocroco_location_health_v2", {
-        target_location_id: l.location_id,
-        ref_day: null,
-      });
-      healthMap.set(l.location_id, data);
-    })
-  );
-
-  const viewRows: ViewRow[] = locations.map((l) => {
-    const total = totals.get(l.location_id) || 0;
-    const health = healthMap.get(l.location_id);
+  const viewRows: ViewRow[] = pageLocationIds.map((locationId) => {
+    const total = totals.get(locationId) || 0;
+    const health = healthById.get(locationId);
     const score = typeof health?.health_score === "number" ? Math.round(health.health_score) : null;
-    const status = String(health?.status || "Unknown");
-    const color = health?.color;
-    const days7 = Number(health?.login?.days7 || 0);
-    const days30 = Number(health?.login?.days30 || 0);
+    const status = scoreToStatus(score);
+    const color = scoreToColor(score);
+    const days7 = loginDaysByLocation.get(locationId) || 0;
     const loginDaysCapped = Math.min(5, days7);
     const loginPct = Math.round((loginDaysCapped / 5) * 100);
-    const displayName = nameMap.get(l.location_id) || l.location_id;
+    const displayName = nameMap.get(locationId) || locationId;
+    const lastSeen = lastSeenByLocation.get(locationId)?.last_seen_at ?? null;
     return {
-      location_id: l.location_id,
+      location_id: locationId,
       display_name: displayName,
-      last_seen_at: l.last_seen_at,
+      last_seen_at: lastSeen,
       total_sec: total,
       total_pct: toPct(total, maxTotal),
       login_days_7: days7,
-      login_days_30: days30,
       login_activity_pct: loginPct,
       health_score: score,
       health_status: status,
       health_pct: score === null ? 0 : Math.max(0, Math.min(100, score)),
       health_color: color,
-      trend: health?.trend?.indicator,
+      score_day: health?.score_day ?? null,
+      computed_at: health?.computed_at ?? null,
     };
   });
 
   const filtered = viewRows.filter((r) => {
     if (q && !r.location_id.toLowerCase().includes(q) && !r.display_name.toLowerCase().includes(q)) return false;
-    if (healthFilter && r.health_status.toLowerCase() !== healthFilter) return false;
     return true;
   });
 
-  const sorted = filtered.sort((a, b) => {
-    if (sort === "health") return (b.health_score ?? -1) - (a.health_score ?? -1);
-    if (sort === "lifetime") return b.total_sec - a.total_sec;
-    const ta = a.last_seen_at ? new Date(a.last_seen_at).getTime() : 0;
-    const tb = b.last_seen_at ? new Date(b.last_seen_at).getTime() : 0;
-    return tb - ta;
-  });
+  const params = new URLSearchParams();
+  if (qRaw) params.set("q", qRaw);
+  if (riskOnly) params.set("risk", "1");
+  if (sortDir) params.set("sort", sortDir);
+  if (limit !== 50) params.set("limit", String(limit));
+
+  const prevOffset = Math.max(0, offset - limit);
+  const nextOffset = offset + limit;
+  const totalKnown = riskOnly ? scoredCount : (missingCount !== null ? scoredCount + missingCount : null);
+  const hasPrev = offset > 0;
+  const hasNext = totalKnown === null ? filtered.length === limit : nextOffset < totalKnown;
 
   // ---------------------------------------------------------
   // 4. RENDER
@@ -219,10 +384,10 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
           <div>
             <h1 className="text-3xl font-bold text-white tracking-tight mb-2">Locations</h1>
             <div className="flex items-center gap-2 text-sm text-zinc-500">
-               <span className="bg-white/5 px-2 py-0.5 rounded text-zinc-300 font-mono">{locations.length}</span>
-               <span>total locations found</span>
-               <span className="text-zinc-700">•</span>
-               <span>Enriched health for top <b className="text-zinc-300">{ENRICH_LIMIT}</b></span>
+               <span className="bg-white/5 px-2 py-0.5 rounded text-zinc-300 font-mono">{filtered.length}</span>
+               <span>locations on this page</span>
+               <span className="text-zinc-700">ƒ?›</span>
+               <span>Scores from <b className="text-zinc-300">location_health_latest</b></span>
             </div>
           </div>
         </header>
@@ -232,19 +397,14 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
            <SearchInput name="q" defaultValue={sp.q || ""} placeholder="Search locations..." />
            
            <div className="flex gap-3 w-full lg:w-auto overflow-x-auto pb-1 lg:pb-0">
-             <Select name="health" defaultValue={healthFilter}>
-                <option value="">All Health Status</option>
-                <option value="thriving">Thriving</option>
-                <option value="healthy">Healthy</option>
-                <option value="steady">Steady</option>
-                <option value="at-risk">At-risk</option>
-                <option value="unknown">Unknown</option>
+             <Select name="sort" defaultValue={sortDir}>
+                <option value="desc">Best health first</option>
+                <option value="asc">Worst health first</option>
              </Select>
 
-             <Select name="sort" defaultValue={sort}>
-                <option value="last_seen">Sort by Last Updated</option>
-                <option value="health">Sort by Health Score</option>
-                <option value="lifetime">Sort by Lifetime</option>
+             <Select name="risk" defaultValue={riskOnly ? "1" : ""}>
+                <option value="">All locations</option>
+                <option value="1">Risk only (score &lt; 45)</option>
              </Select>
            </div>
 
@@ -282,9 +442,13 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {sorted.map((l) => {
+                {filtered.map((l) => {
                   const badge = healthColor(l.health_color);
-                  const healthLabel = `${l.health_status}${l.health_score === null ? "" : ` ${l.health_score}%`}`;
+                  const healthLabel = l.health_score === null
+                    ? "Not computed"
+                    : `${l.health_status} ${l.health_score}%`;
+                  const scoreDayLabel = l.score_day ? new Date(l.score_day).toLocaleDateString() : "n/a";
+                  const computedAtLabel = l.computed_at ? new Date(l.computed_at).toLocaleString() : "n/a";
                   
                   return (
                     <tr key={l.location_id} className="group hover:bg-white/[0.02] transition-colors">
@@ -304,14 +468,14 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
                             href={`/users?location_id=${encodeURIComponent(l.location_id)}`}
                             className="text-xs text-zinc-600 mt-1 hover:text-zinc-400 transition-colors w-fit flex items-center gap-1"
                           >
-                            View users <span className="text-[10px]">→</span>
+                            View users <span className="text-[10px]">ƒ+'</span>
                           </a>
                         </div>
                       </td>
                       
                       <td className="px-6 py-4">
                         <div className="text-sm text-zinc-400 font-medium">
-                           {l.last_seen_at ? new Date(l.last_seen_at).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : "—"}
+                           {l.last_seen_at ? new Date(l.last_seen_at).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : "n/a"}
                         </div>
                         <div className="text-xs text-zinc-600 mt-0.5 font-mono">
                            {l.last_seen_at ? new Date(l.last_seen_at).toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'}) : ""}
@@ -352,15 +516,15 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
                            <div className="flex items-center">
                               <span 
                                 className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border shadow-sm backdrop-blur-sm transition-transform group-hover:scale-105"
+                                title={`score_day: ${scoreDayLabel}\ncomputed_at: ${computedAtLabel}`}
                                 style={{
                                     backgroundColor: badge.bg || "rgba(255,255,255,0.05)",
                                     color: badge.fg || "#fff",
                                     borderColor: badge.bg ? "transparent" : "rgba(255,255,255,0.1)",
                                 }}
                               >
-                                 <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: badge.fg, boxShadow: `0 0 6px ${badge.fg}40` }} />
+                                 <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: badge.fg, boxShadow: `0 0 6px ${badge.fg}40` }} />
                                  {healthLabel}
-                                 {l.trend && <span className="opacity-80 ml-0.5">{trendIcon(l.trend)}</span>}
                               </span>
                            </div>
                            
@@ -387,7 +551,7 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
                   );
                 })}
                 
-                {sorted.length === 0 && (
+                {filtered.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-6 py-12 text-center text-zinc-500 italic">
                        No locations match the current filters.
@@ -401,8 +565,30 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
         
         {/* Footer info */}
         <div className="flex flex-col sm:flex-row justify-between items-center text-xs text-zinc-600 px-2 pb-10 gap-2">
-           <div>Showing {sorted.length} locations</div>
-           <div>Sorted by <span className="text-zinc-400 font-medium">{sort}</span></div>
+           <div>Showing {filtered.length} locations (offset {offset}, limit {limit})</div>
+           <div className="flex items-center gap-3">
+             {hasPrev ? (
+               <a
+                 href={buildPageUrl(params, prevOffset)}
+                 className="px-3 py-1 rounded border border-white/10 text-zinc-400 hover:text-white hover:border-white/30 transition-colors"
+               >
+                 Prev
+               </a>
+             ) : (
+               <span className="px-3 py-1 rounded border border-white/5 text-zinc-600">Prev</span>
+             )}
+             {hasNext ? (
+               <a
+                 href={buildPageUrl(params, nextOffset)}
+                 className="px-3 py-1 rounded border border-white/10 text-zinc-400 hover:text-white hover:border-white/30 transition-colors"
+               >
+                 Next
+               </a>
+             ) : (
+               <span className="px-3 py-1 rounded border border-white/5 text-zinc-600">Next</span>
+             )}
+             <span>Sorted by <span className="text-zinc-400 font-medium">health_score {sortDir}</span></span>
+           </div>
         </div>
         
       </div>

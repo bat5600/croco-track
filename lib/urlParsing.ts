@@ -4,7 +4,9 @@ const FEATURE_SET = new Set(FEATURES.map((f) => f.key));
 const FEATURE_ALIASES: Record<string, string> = {
   "page-builder": "funnels-websites",
   "quiz-builder-v2": "survey-builder",
+  "quiz-builder": "survey-builder",
   "form-builder-v2": "form-builder",
+  analytics: "dashboard",
 };
 
 type ParsedFeature = {

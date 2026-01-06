@@ -62,6 +62,12 @@ export default function RootLayout({
                 </summary>
                 <div className="absolute left-0 mt-2 w-56 rounded-lg border border-white/10 bg-zinc-950/95 p-2 shadow-lg backdrop-blur">
                   <Link
+                    href="/summary-health"
+                    className="block rounded-md px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-white/5 hover:text-white"
+                  >
+                    Summary Health
+                  </Link>
+                  <Link
                     href="/login-activity"
                     className="block rounded-md px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-white/5 hover:text-white"
                   >
