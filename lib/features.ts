@@ -6,6 +6,7 @@ export const FEATURES = [
   { key: "opportunities", label: "Opportunities" },
   { key: "payments", label: "Payments" },
   { key: "marketing", label: "Marketing" },
+  { key: "email", label: "Email" },
   { key: "automation", label: "Automation" },
   { key: "reputation", label: "Reputation" },
   { key: "blogs", label: "Blogs" },

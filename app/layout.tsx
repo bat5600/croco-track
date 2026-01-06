@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Link from "next/link";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -27,6 +28,68 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <header className="sticky top-0 z-40 w-full border-b border-white/5 bg-black/70 backdrop-blur">
+          <div className="mx-auto flex max-w-[1280px] items-center gap-4 px-6 py-3 md:px-10">
+            <Link
+              href="/"
+              className="text-sm font-semibold tracking-wide text-white"
+            >
+              Croco Track
+            </Link>
+            <nav className="flex flex-1 items-center gap-1 text-sm text-zinc-300">
+              <Link
+                href="/"
+                className="rounded-md px-3 py-2 transition-colors hover:bg-white/5 hover:text-white"
+              >
+                Events
+              </Link>
+              <details className="group relative">
+                <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2 transition-colors hover:bg-white/5 hover:text-white">
+                  Analytics
+                  <svg
+                    className="h-3 w-3 text-zinc-500 transition-transform group-open:rotate-180"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                  >
+                    <path
+                      d="M3 4.5L6 7.5L9 4.5"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </summary>
+                <div className="absolute left-0 mt-2 w-56 rounded-lg border border-white/10 bg-zinc-950/95 p-2 shadow-lg backdrop-blur">
+                  <Link
+                    href="/login-activity"
+                    className="block rounded-md px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-white/5 hover:text-white"
+                  >
+                    Login Activity
+                  </Link>
+                  <Link
+                    href="/product-adoption"
+                    className="block rounded-md px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-white/5 hover:text-white"
+                  >
+                    Product Adoption
+                  </Link>
+                </div>
+              </details>
+              <Link
+                href="/users"
+                className="rounded-md px-3 py-2 transition-colors hover:bg-white/5 hover:text-white"
+              >
+                Users
+              </Link>
+              <Link
+                href="/locations"
+                className="rounded-md px-3 py-2 transition-colors hover:bg-white/5 hover:text-white"
+              >
+                Locations
+              </Link>
+            </nav>
+          </div>
+        </header>
         {children}
       </body>
     </html>

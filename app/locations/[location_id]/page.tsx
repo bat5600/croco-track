@@ -12,6 +12,7 @@ import { fmtSec, healthColor, trendIcon, riskTags } from "@/lib/ui";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import SyncLocationForm from "./SyncLocationForm";
+import FeatureUsageUserSelect from "./FeatureUsageUserSelect";
 
 // --- Helpers ---
 function labelForFeature(key: string) {
@@ -86,7 +87,7 @@ function formatMoney(
   if (!Number.isFinite(value)) return null;
   const normalized = value >= 100 ? value / 100 : value;
   const currencyCode = currency ? String(currency).toUpperCase() : null;
-  if (currencyCode === "EUR") return `€${normalized}`;
+  if (currencyCode === "EUR") return `EUR ${normalized}`;
   if (symbol) return `${symbol}${normalized}`;
   if (currencyCode) return `${normalized} ${currencyCode}`;
   return String(normalized);
@@ -107,7 +108,7 @@ const THEME = {
   fontMono: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
 };
 
-// Styles objets réutilisables
+// Styles objets reutilisables
 const S = {
   page: {
     minHeight: "100vh",
@@ -191,10 +192,10 @@ const MetricMini = ({ label, value, type = "text" }: { label: string; value: any
   }}>
     <span style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: THEME.textMuted, fontWeight: 600 }}>{label}</span>
     {type === "text" ? (
-         <span style={{ color: THEME.textMain, fontWeight: 600, fontSize: "14px" }}>{value ?? "—"}</span>
+         <span style={{ color: THEME.textMain, fontWeight: 600, fontSize: "14px" }}>{value ?? "n/a"}</span>
     ) : (
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-             <span style={{ color: THEME.textMain, fontWeight: 600, fontSize: "14px" }}>{value ?? 0}</span>
+         <span style={{ color: THEME.textMain, fontWeight: 600, fontSize: "14px" }}>{value ?? 0}</span>
              <div style={{ width: "40px", height: "4px", background: THEME.barBg, borderRadius: "2px", overflow: "hidden" }}>
                 <div style={{ width: `${Math.min(100, (value || 0) * 10)}%`, height: "100%", background: THEME.accent }} />
              </div>
@@ -204,7 +205,7 @@ const MetricMini = ({ label, value, type = "text" }: { label: string; value: any
   </div>
 );
 
-// CSS Grid responsive injecté
+// CSS Grid responsive injected
 const responsiveCSS = `
   .linear-grid { display: grid; grid-template-columns: 1fr; gap: 24px; }
   .col-main { grid-column: span 1; }
@@ -244,9 +245,18 @@ const responsiveCSS = `
   }
 `;
 
-export default async function LocationPage({ params }: { params: Promise<{ location_id: string }> }) {
+export default async function LocationPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ location_id: string }>;
+  searchParams?: Promise<{ user_email?: string }>;
+}) {
   const p = await params;
+  const sp = searchParams ? await searchParams : {};
   const location_id = decodeURIComponent(p.location_id);
+  const selectedEmailRaw = sp?.user_email ? decodeURIComponent(sp.user_email) : null;
+  const selectedEmail = selectedEmailRaw && selectedEmailRaw !== "all" ? selectedEmailRaw : null;
 
   // --- DATA FETCHING ---
   async function syncLocationAction(
@@ -349,7 +359,7 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
   });
   const badge = healthColor(health?.color);
   const score = typeof health?.health_score === "number" ? Math.round(health.health_score) : null;
-  const status = health?.status ?? "—";
+  const status = health?.status ?? "n/a";
   const trend = health?.trend?.indicator;
   const loginScore = typeof health?.components?.login_activity_score === "number"
     ? Math.round(health.components.login_activity_score)
@@ -423,6 +433,26 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
     userTotals.set(r.email, (userTotals.get(r.email) || 0) + Number(r.time_sec || 0));
   }
 
+  let selectedFeatureTimeByKey = new Map<string, number>();
+  if (selectedEmail) {
+    const { data: selectedLifetimeRows, error: eSelected } = await supabaseAdmin
+      .from("user_feature_lifetime")
+      .select("feature_key, time_sec")
+      .eq("location_id", location_id)
+      .ilike("email", selectedEmail);
+
+    if (eSelected) return <ErrorState msg={eSelected.message} id={location_id} />;
+
+    for (const r of selectedLifetimeRows || []) {
+      const rawKey = r.feature_key || "other";
+      const featureKey = getAggregatedFeatureKey(rawKey);
+      selectedFeatureTimeByKey.set(
+        featureKey,
+        (selectedFeatureTimeByKey.get(featureKey) || 0) + Number(r.time_sec || 0)
+      );
+    }
+  }
+
   // C) Sparkline
   const since14 = new Date();
   since14.setDate(since14.getDate() - 13);
@@ -477,6 +507,9 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
     .sort((a, b) => (a.health.health_score ?? 999) - (b.health.health_score ?? 999))
     .slice(0, 5);
 
+  const usageFeatureTimeByKey = selectedEmail ? selectedFeatureTimeByKey : featureTimeByKey;
+  const usageTopTime = Math.max(1, ...Array.from(usageFeatureTimeByKey.values()));
+
   // --- RENDER ---
   return (
     <main style={S.page}>
@@ -484,23 +517,127 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
       
       <div style={S.container}>
         {/* HEADER */}
-        <header className="header-flex" style={{ borderBottom: `1px solid ${THEME.border}`, paddingBottom: "32px", marginBottom: "32px" }}>
-          <div>
-            <nav style={{ fontSize: "12px", color: THEME.textMuted, marginBottom: "12px", display: "flex", gap: "8px" }}>
-              <a href="/locations" style={{ ...S.linkReset, color: THEME.textMuted }}>Locations</a>
-              <span>/</span>
-              <span style={{ color: THEME.textMain }}>{location_id}</span>
-            </nav>
-            <h1 style={{ fontSize: "32px", fontWeight: 700, color: "#fff", margin: 0, letterSpacing: "-0.02em" }}>{locationName}</h1>
-            <div style={{ fontSize: "12px", color: THEME.textMuted, marginTop: "6px" }}>{location_id}</div>
-            <div style={{ display: "flex", alignItems: "center", gap: "16px", marginTop: "12px", fontSize: "14px" }}>
+        <header
+          style={{
+            borderBottom: `1px solid ${THEME.border}`,
+            paddingBottom: "32px",
+            marginBottom: "32px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "20px",
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "flex-end",
+                justifyContent: "space-between",
+                gap: "16px",
+              }}
+            >
+              <div>
+                <nav
+                  style={{
+                    fontSize: "12px",
+                    color: THEME.textMuted,
+                    marginBottom: "12px",
+                    display: "flex",
+                    gap: "8px",
+                  }}
+                >
+                  <a href="/locations" style={{ ...S.linkReset, color: THEME.textMuted }}>
+                    Locations
+                  </a>
+                  <span>/</span>
+                  <span style={{ color: THEME.textMain }}>{location_id}</span>
+                </nav>
+                <h1
+                  style={{
+                    fontSize: "32px",
+                    fontWeight: 700,
+                    color: "#fff",
+                    margin: 0,
+                    letterSpacing: "-0.02em",
+                  }}
+                >
+                  {locationName}
+                </h1>
+                <div style={{ fontSize: "12px", color: THEME.textMuted, marginTop: "6px" }}>
+                  {location_id}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
+                <a
+                  href={`/users?location_id=${encodeURIComponent(location_id)}`}
+                  style={{
+                    ...S.linkReset,
+                    padding: "8px 16px",
+                    backgroundColor: "#fff",
+                    color: "#000",
+                    fontSize: "13px",
+                    fontWeight: 600,
+                    borderRadius: "8px",
+                    height: "32px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                  }}
+                >
+                  Users +
+                </a>
+                <SyncLocationForm
+                  action={syncLocationAction}
+                  companyId={locationRow?.company_id || ""}
+                  locationId={location_id}
+                  disabled={!location_id}
+                  buttonStyle={{
+                    padding: "8px 16px",
+                    backgroundColor: "transparent",
+                    color: THEME.textMain,
+                    fontSize: "13px",
+                    fontWeight: 600,
+                    borderRadius: "8px",
+                    border: `1px solid ${THEME.border}`,
+                    height: "32px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                  }}
+                />
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "16px",
+                marginTop: "4px",
+                fontSize: "14px",
+                flexWrap: "wrap",
+              }}
+            >
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: THEME.accent, boxShadow: `0 0 8px ${THEME.accent}40` }}></span>
-                <span style={{ color: THEME.textMain, fontWeight: 500 }}>{users.length} Active Users</span>
+                <span
+                  style={{
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "50%",
+                    background: THEME.accent,
+                    boxShadow: `0 0 8px ${THEME.accent}40`,
+                  }}
+                ></span>
+                <span style={{ color: THEME.textMain, fontWeight: 500 }}>
+                  {users.length} Active Users
+                </span>
               </div>
               <span style={{ color: THEME.textDark }}>|</span>
               <div style={{ color: THEME.textMuted }}>
-                Lifetime: <span style={{ color: THEME.textMain, fontFamily: THEME.fontMono }}>{fmtSec(totalLifetime)}</span>
+                Lifetime:{" "}
+                <span style={{ color: THEME.textMain, fontFamily: THEME.fontMono }}>
+                  {fmtSec(totalLifetime)}
+                </span>
               </div>
               <span style={{ color: THEME.textDark }}>|</span>
               <div style={{ color: THEME.textMuted }}>
@@ -546,62 +683,48 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "32px", alignItems: "flex-end" }}>
-              {/* Metrics Group */}
-             <div style={{ display: "flex", gap: "24px", paddingRight: "24px", borderRight: `1px solid ${THEME.border}` }}>
-                 <MetricMini label="Login Activity" value={`${loginScore || 0}/5`} />
-                 <MetricMini label="Product Adoption" value={health?.components?.product_adoption_score} type="bar" />
-                 <MetricMini label="Page Views" value={pageViewCount} />
-             </div>
-
-             {/* Main Health Score */}
-             <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: THEME.textMuted, fontWeight: 600, marginBottom: "4px" }}>Health Score</div>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: "8px", justifyContent: "flex-end" }}>
-                      <span style={{ fontSize: "32px", fontWeight: 700, color: "#fff", lineHeight: 1 }}>{score === null ? "—" : score}</span>
-                      <span style={{ fontSize: "14px", fontWeight: 500, color: badge.fg }}>{status}</span>
-                  </div>
-             </div>
-             
-             <a
-              href={`/users?location_id=${encodeURIComponent(location_id)}`}
+          <div style={{ display: "flex", gap: "24px", alignItems: "flex-end", flexWrap: "wrap" }}>
+            {/* Metrics Group */}
+            <div
               style={{
-                ...S.linkReset,
-                padding: "8px 16px",
-                backgroundColor: "#fff",
-                color: "#000",
-                fontSize: "13px",
-                fontWeight: 600,
-                borderRadius: "8px",
-                marginLeft: "8px",
-                height: "32px",
-                display: "inline-flex",
-                alignItems: "center"
+                display: "flex",
+                gap: "24px",
+                paddingRight: "24px",
+                borderRight: `1px solid ${THEME.border}`,
               }}
             >
-              Users →
-            </a>
-            <SyncLocationForm
-              action={syncLocationAction}
-              companyId={locationRow?.company_id || ""}
-              locationId={location_id}
-              disabled={!location_id}
-              buttonStyle={{
-                padding: "8px 16px",
-                backgroundColor: "transparent",
-                color: THEME.textMain,
-                fontSize: "13px",
-                fontWeight: 600,
-                borderRadius: "8px",
-                border: `1px solid ${THEME.border}`,
-                height: "32px",
-                display: "inline-flex",
-                alignItems: "center",
-              }}
-            />
+              <MetricMini label="Login Activity" value={`${loginScore || 0}/5`} />
+              <MetricMini
+                label="Product Adoption"
+                value={health?.components?.product_adoption_score}
+                type="bar"
+              />
+              <MetricMini label="Page Views" value={pageViewCount} />
+            </div>
+
+            {/* Main Health Score */}
+            <div style={{ textAlign: "right" }}>
+              <div
+                style={{
+                  fontSize: "10px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  color: THEME.textMuted,
+                  fontWeight: 600,
+                  marginBottom: "4px",
+                }}
+              >
+                Health Score
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: "8px", justifyContent: "flex-end" }}>
+                <span style={{ fontSize: "32px", fontWeight: 700, color: "#fff", lineHeight: 1 }}>
+                  {score === null ? "n/a" : score}
+                </span>
+                <span style={{ fontSize: "14px", fontWeight: 500, color: badge.fg }}>{status}</span>
+              </div>
+            </div>
           </div>
         </header>
-
         {/* BENTO GRID */}
         <div className="linear-grid">
           
@@ -685,7 +808,7 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
                                     {t}
                                   </span>
                                 ))}
-                                {tags.length === 0 && <span style={{ color: THEME.textDark }}>—</span>}
+                                {tags.length === 0 && <span style={{ color: THEME.textDark }}>n/a</span>}
                               </div>
                             </td>
                           </tr>
@@ -769,16 +892,9 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
               <div style={{ flexShrink: 0 }}>
                   <SectionHeader 
                     title="Feature Usage" 
-                    subtitle="Time Spent"
+                    subtitle={selectedEmail ? `Time Spent - ${selectedEmail}` : "Time Spent"}
                     rightElement={
-                        // Visual fake select since this is Server Component. 
-                        // Real implementation would use URL params or client component.
-                        <select className="user-select" aria-label="Filter by user">
-                             <option value="all">All Users</option>
-                             {users.slice(0, 5).map(u => (
-                                 <option key={u.email} value={u.email}>{u.email.split('@')[0]}</option>
-                             ))}
-                        </select>
+                        <FeatureUsageUserSelect users={users} selectedEmail={selectedEmail} />
                     }
                   />
                   <div style={{ 
@@ -794,8 +910,8 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
               <div className="custom-scroll" style={{ overflowY: "auto", paddingRight: "4px" }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                     {displayFeatures.map((f) => {
-                        const time = featureTimeByKey.get(f.key) || 0;
-                        const barWidth = Math.min(100, (time / (topFeatures[0]?.time_sec || 1)) * 100);
+                        const time = usageFeatureTimeByKey.get(f.key) || 0;
+                        const barWidth = Math.min(100, (time / usageTopTime) * 100);
                         return (
                             <div key={f.key} style={{ position: "relative", padding: "6px 8px", borderRadius: "6px", overflow: "hidden" }}>
                                 {/* Subtle BG bar for relative value visual */}
@@ -807,7 +923,7 @@ export default async function LocationPage({ params }: { params: Promise<{ locat
                                 <div style={{ position: "relative", zIndex: 1, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                                     <span style={{ fontSize: "13px", color: THEME.textMain }}>{f.label}</span>
                                     <span style={{ fontSize: "12px", fontFamily: THEME.fontMono, color: time > 0 ? THEME.textMuted : THEME.textDark }}>
-                                        {time > 0 ? fmtSec(time) : "—"}
+                                        {time > 0 ? fmtSec(time) : "n/a"}
                                     </span>
                                 </div>
                             </div>
@@ -833,6 +949,7 @@ function ErrorState({ msg, id }: { msg: string; id: string }) {
     </main>
   );
 }
+
 
 
 

@@ -30,6 +30,17 @@ type ViewRow = EmailRow & {
   login_pct: number;
 };
 
+function pickLocationName(profile: any, fallback: string) {
+  if (!profile) return fallback;
+  return (
+    profile.name ||
+    profile?.location?.name ||
+    profile?.business?.name ||
+    profile?.companyName ||
+    fallback
+  );
+}
+
 // --- Components ---
 
 const SearchInput = (props: React.InputHTMLAttributes<HTMLInputElement>) => (
@@ -131,6 +142,19 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
   // 2) lifetime totals
   const emails = Array.from(new Set(aggregatedRows.map(r => r.email)));
   const locations = Array.from(new Set(filteredRows.map(r => r.location_id)));
+
+  const locationNameMap = new Map<string, string>();
+  if (locations.length) {
+    const { data: locationRows } = await supabaseAdmin
+      .from("ghl_locations")
+      .select("location_id, profile")
+      .in("location_id", locations);
+    for (const row of locationRows || []) {
+      const id = String(row.location_id || "");
+      if (!id) continue;
+      locationNameMap.set(id, pickLocationName(row.profile, id));
+    }
+  }
 
   const { data: lifetime, error: e2 } = await supabaseAdmin
     .from("user_feature_lifetime")
@@ -250,6 +274,8 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
 
   // --- RENDER ---
 
+  const locationLabel = location_id ? (locationNameMap.get(location_id) || location_id) : "";
+
   return (
     <main className="min-h-screen bg-black text-zinc-400 font-sans p-6 md:p-10 selection:bg-zinc-800">
       <div className="max-w-[1600px] mx-auto space-y-8">
@@ -262,7 +288,7 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
                {location_id ? (
                  <>
                    <span>Filtering by location:</span>
-                   <span className="bg-white/5 px-2 py-0.5 rounded text-zinc-300 font-mono border border-white/5">{location_id}</span>
+                   <span className="bg-white/5 px-2 py-0.5 rounded text-zinc-300 font-mono border border-white/5">{locationLabel}</span>
                  </>
                ) : (
                  <span>All locations</span>
@@ -360,7 +386,7 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
                                  href={`/locations/${encodeURIComponent(u.locations[0])}`}
                                  className="text-xs font-mono text-zinc-400 bg-white/5 px-1.5 py-0.5 rounded border border-white/5 hover:border-white/20 transition-colors"
                                >
-                                 {u.locations[0]}
+                                 {locationNameMap.get(u.locations[0]) || u.locations[0]}
                                </a>
                              )}
                              {u.locations.length > 1 && (

@@ -124,16 +124,29 @@ export default async function ProductAdoptionPage() {
     );
   }
 
+  const displayFeatures = getDisplayFeatures(FEATURES);
+  const knownFeatureKeys = new Set(displayFeatures.map((f) => f.key));
+
   const featureTotals = new Map<string, number>();
   const userFeatureTotals = new Map<string, number>();
   const locationFeatureTotals = new Map<string, number>();
   const userTotals = new Map<string, number>();
   const locationTotals = new Map<string, number>();
+  const otherBreakdownTotals = new Map<string, number>();
 
   for (const r of lifetimeRows || []) {
-    const feature = getAggregatedFeatureKey(r.feature_key || "other");
+    const rawKey = r.feature_key || "other";
+    const aggregatedKey = getAggregatedFeatureKey(rawKey);
+    const feature = knownFeatureKeys.has(aggregatedKey) ? aggregatedKey : "other";
     const time = Number(r.time_sec || 0);
     featureTotals.set(feature, (featureTotals.get(feature) || 0) + time);
+
+    if (feature === "other" && !knownFeatureKeys.has(aggregatedKey)) {
+      otherBreakdownTotals.set(
+        aggregatedKey,
+        (otherBreakdownTotals.get(aggregatedKey) || 0) + time
+      );
+    }
 
     if (r.email) {
       const k = `${r.email}${KEY_SEP}${feature}`;
@@ -163,7 +176,6 @@ export default async function ProductAdoptionPage() {
   }
 
   const featureKeys = new Set<string>();
-  const displayFeatures = getDisplayFeatures(FEATURES);
   displayFeatures.forEach((f) => featureKeys.add(f.key));
   featureTotals.forEach((_v, k) => featureKeys.add(k));
   adoptedUsersByFeature.forEach((_v, k) => featureKeys.add(k));
@@ -223,6 +235,11 @@ export default async function ProductAdoptionPage() {
     .slice()
     .sort((a, b) => b.locations_adopted - a.locations_adopted)
     .slice(0, 10);
+
+  const totalOtherSec = featureTotals.get("other") || 0;
+  const otherBreakdown = Array.from(otherBreakdownTotals.entries())
+    .map(([key, time_sec]) => ({ key, time_sec }))
+    .sort((a, b) => b.time_sec - a.time_sec);
 
   const since = new Date();
   since.setDate(since.getDate() - 13);
@@ -452,6 +469,31 @@ export default async function ProductAdoptionPage() {
                     </div>
                   );
                 })}
+              </div>
+            </Card>
+
+            <Card>
+              <SectionHeader title="Other breakdown" subtitle="Features grouped into Other" />
+              <div className="space-y-2 max-h-[320px] overflow-auto pr-1">
+                {otherBreakdown.map((f) => {
+                  const pct = totalOtherSec ? Math.round((f.time_sec / totalOtherSec) * 100) : 0;
+                  return (
+                    <div key={f.key} className="flex flex-col gap-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-300 truncate">{f.key}</span>
+                        <span className="text-zinc-500 font-mono">{fmtSec(f.time_sec)}</span>
+                      </div>
+                      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+                        <div className="h-full bg-amber-300" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+                {otherBreakdown.length === 0 && (
+                  <div className="text-sm text-zinc-600 italic py-2 text-center">
+                    No extra features grouped into Other.
+                  </div>
+                )}
               </div>
             </Card>
           </div>
