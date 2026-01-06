@@ -303,7 +303,13 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
     const id = String(r.location_id || "");
     if (!id) continue;
     const prev = lastSeenByLocation.get(id);
-    if (!prev) lastSeenByLocation.set(id, { location_id: id, last_seen_at: r.last_seen_at ?? null });
+    if (!prev) {
+      lastSeenByLocation.set(id, {
+        location_id: id,
+        last_seen_at: r.last_seen_at ?? null,
+        email: r.email ?? null,
+      });
+    }
     else {
       const a = prev.last_seen_at ? new Date(prev.last_seen_at).getTime() : 0;
       const b = r.last_seen_at ? new Date(r.last_seen_at).getTime() : 0;

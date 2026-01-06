@@ -250,13 +250,14 @@ export default async function LocationPage({
   searchParams,
 }: {
   params: Promise<{ location_id: string }>;
-  searchParams?: Promise<{ user_email?: string }>;
+  searchParams?: Promise<{ user_email?: string; debug?: string }>;
 }) {
   const p = await params;
   const sp = searchParams ? await searchParams : {};
   const location_id = decodeURIComponent(p.location_id);
   const selectedEmailRaw = sp?.user_email ? decodeURIComponent(sp.user_email) : null;
   const selectedEmail = selectedEmailRaw && selectedEmailRaw !== "all" ? selectedEmailRaw : null;
+  const debugMode = String(sp?.debug || "") === "1";
 
   // --- DATA FETCHING ---
   async function syncLocationAction(
@@ -682,6 +683,42 @@ export default async function LocationPage({
               </div>
             </div>
           </div>
+
+          {debugMode && (
+            <div
+              style={{
+                marginTop: "16px",
+                padding: "12px",
+                backgroundColor: "rgba(251, 191, 36, 0.08)",
+                border: "1px solid rgba(251, 191, 36, 0.2)",
+                borderRadius: "8px",
+                fontSize: "12px",
+                color: "#fcd34d",
+              }}
+            >
+              Debug mode enabled. Add <span style={{ fontFamily: THEME.fontMono }}>&amp;debug=1</span> to the URL.
+              <details style={{ marginTop: "10px" }}>
+                <summary style={{ cursor: "pointer", color: "#fff" }}>
+                  Subscription payload
+                </summary>
+                <pre
+                  style={{
+                    marginTop: "8px",
+                    whiteSpace: "pre-wrap",
+                    background: "rgba(0,0,0,0.35)",
+                    border: `1px solid ${THEME.border}`,
+                    padding: "10px",
+                    borderRadius: "6px",
+                    color: THEME.textMain,
+                    fontFamily: THEME.fontMono,
+                    fontSize: "11px",
+                  }}
+                >
+                  {JSON.stringify(locationSubscription, null, 2)}
+                </pre>
+              </details>
+            </div>
+          )}
 
           <div style={{ display: "flex", gap: "24px", alignItems: "flex-end", flexWrap: "wrap" }}>
             {/* Metrics Group */}

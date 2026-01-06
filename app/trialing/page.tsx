@@ -156,7 +156,19 @@ function getPlanName(subscription: any) {
   );
 }
 
-export default async function TrialingPage() {
+export default async function TrialingPage({
+  searchParams,
+}: {
+  searchParams?: { [key: string]: string | string[] | undefined };
+}) {
+  const sp = searchParams || {};
+  const debug = String(sp.debug || "") === "1";
+  const debugLocationIdRaw = Array.isArray(sp.location_id)
+    ? sp.location_id[0]
+    : sp.location_id;
+  const debugLocationId = debugLocationIdRaw
+    ? String(debugLocationIdRaw)
+    : null;
   const { data: locationRowsRaw, error } = await supabaseAdmin
     .from("ghl_locations")
     .select("location_id, profile, subscription");
@@ -176,7 +188,10 @@ export default async function TrialingPage() {
     );
   }
 
-  const rows = (locationRowsRaw || []) as LocationRow[];
+  const rowsRaw = (locationRowsRaw || []) as LocationRow[];
+  const rows = debugLocationId
+    ? rowsRaw.filter((row) => row.location_id === debugLocationId)
+    : rowsRaw;
   let trialingTotal = 0;
   let trialingKnown = 0;
   let trialingReal = 0;
@@ -219,6 +234,7 @@ export default async function TrialingPage() {
         trial_start: getTrialStartDate(data),
         trial_end: getTrialEndDate(data),
         created_at: getCreatedAtDate(row.subscription),
+        subscription: row.subscription,
         status,
       };
     })
@@ -230,6 +246,7 @@ export default async function TrialingPage() {
     trial_start: Date | null;
     trial_end: Date | null;
     created_at: Date | null;
+    subscription: any;
     status: string;
   }>;
 
@@ -282,6 +299,12 @@ export default async function TrialingPage() {
           </div>
         </header>
 
+        {debug && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-100">
+            Debug actif. Ajoute `?location_id=ID` pour isoler un compte.
+          </div>
+        )}
+
         {trialingRows.length === 0 ? (
           <div className="bg-zinc-900/40 border border-white/5 rounded-xl p-10 text-center text-zinc-500">
             Aucun trialing avec duree connue &lt;= 30 jours.
@@ -303,47 +326,63 @@ export default async function TrialingPage() {
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {trialingRows.map((row) => (
-                    <tr key={row.location_id} className="hover:bg-white/[0.02]">
-                      <td className="px-6 py-4">
-                        <div className="text-zinc-200 font-medium truncate max-w-[300px]">
-                          {row.display_name}
-                        </div>
-                        <div className="text-xs text-zinc-600 font-mono mt-1">
-                          {row.location_id}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-zinc-300">{row.plan}</td>
-                      <td className="px-6 py-4">
-                        <span className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-semibold border border-emerald-400/30 text-emerald-200 bg-emerald-500/10">
-                          {row.trial_days} jours
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-zinc-400">
-                        {row.trial_start
-                          ? row.trial_start.toLocaleDateString()
-                          : "n/a"}
-                      </td>
-                      <td className="px-6 py-4 text-zinc-400">
-                        {row.trial_end
-                          ? row.trial_end.toLocaleDateString()
-                          : "n/a"}
-                      </td>
-                      <td className="px-6 py-4 text-zinc-400">
-                        {row.created_at
-                          ? row.created_at.toLocaleDateString()
-                          : "n/a"}
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <a
-                          href={`/locations/${encodeURIComponent(
-                            row.location_id
-                          )}`}
-                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-white/5 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-white/10 hover:border-white/20 transition-all"
-                        >
-                          Ouvrir
-                        </a>
-                      </td>
-                    </tr>
+                    <>
+                      <tr key={row.location_id} className="hover:bg-white/[0.02]">
+                        <td className="px-6 py-4">
+                          <div className="text-zinc-200 font-medium truncate max-w-[300px]">
+                            {row.display_name}
+                          </div>
+                          <div className="text-xs text-zinc-600 font-mono mt-1">
+                            {row.location_id}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-zinc-300">{row.plan}</td>
+                        <td className="px-6 py-4">
+                          <span className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-semibold border border-emerald-400/30 text-emerald-200 bg-emerald-500/10">
+                            {row.trial_days} jours
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-zinc-400">
+                          {row.trial_start
+                            ? row.trial_start.toLocaleDateString()
+                            : "n/a"}
+                        </td>
+                        <td className="px-6 py-4 text-zinc-400">
+                          {row.trial_end
+                            ? row.trial_end.toLocaleDateString()
+                            : "n/a"}
+                        </td>
+                        <td className="px-6 py-4 text-zinc-400">
+                          {row.created_at
+                            ? row.created_at.toLocaleDateString()
+                            : "n/a"}
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <a
+                            href={`/locations/${encodeURIComponent(
+                              row.location_id
+                            )}`}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-white/5 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-white/10 hover:border-white/20 transition-all"
+                          >
+                            Ouvrir
+                          </a>
+                        </td>
+                      </tr>
+                      {debug && (
+                        <tr className="bg-black/30">
+                          <td colSpan={7} className="px-6 py-4">
+                            <details className="text-xs text-zinc-400">
+                              <summary className="cursor-pointer text-zinc-300">
+                                Payload subscription
+                              </summary>
+                              <pre className="mt-3 whitespace-pre-wrap rounded-lg border border-white/5 bg-black/40 p-3 text-[11px] text-zinc-300">
+                                {JSON.stringify(row.subscription, null, 2)}
+                              </pre>
+                            </details>
+                          </td>
+                        </tr>
+                      )}
+                    </>
                   ))}
                 </tbody>
               </table>

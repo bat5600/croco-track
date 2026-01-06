@@ -701,7 +701,7 @@ export default async function SummaryHealthPage() {
                     <th className="py-3 pr-4">Account</th>
                     <th className="py-3 pr-4">Score</th>
                     <th className="py-3 pr-4">Delta</th>
-                    <th className="py-3 pr-4">Value</th>
+                    <th className="py-3 pr-4">Value (€)</th>
                     <th className="py-3 pr-4">Signals</th>
                     <th className="py-3 text-right">Action</th>
                   </tr>
