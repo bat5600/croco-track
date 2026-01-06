@@ -37,6 +37,12 @@ type LastSeenRow = {
   last_seen_at: string | null;
 };
 
+type LocationRow = {
+  location_id: string;
+  profile: any;
+  subscription?: any;
+};
+
 const DAYS = 14;
 
 function scoreTier(score: number | null) {
@@ -83,6 +89,49 @@ function riskReasons(row: LatestRow) {
   if (row.trend_score <= 5) tags.push("Negative trend");
   if (!tags.length) tags.push("Score drop");
   return tags.slice(0, 3);
+}
+
+function formatSubscription(subscription: any) {
+  if (!subscription) return null;
+  const data = subscription?.data || subscription;
+  const planDetails = data?.plan || subscription?.plan;
+  const prices = Array.isArray(planDetails?.prices) ? planDetails.prices : [];
+  const activeMonthly =
+    prices.find((p: any) => p?.billingInterval === "month" && p?.active) ||
+    prices.find((p: any) => p?.billingInterval === "month") ||
+    prices.find((p: any) => p?.active) ||
+    prices[0];
+  const mrr =
+    data.mrr ||
+    data?.mrrAmount ||
+    data?.amount ||
+    planDetails?.mrr ||
+    planDetails?.amount ||
+    planDetails?.price ||
+    planDetails?.price?.amount ||
+    planDetails?.price?.unitAmount ||
+    planDetails?.price?.value ||
+    activeMonthly?.amount;
+  return {
+    mrr,
+    mrrCurrency: activeMonthly?.currency || planDetails?.currency || null,
+    mrrSymbol: activeMonthly?.symbol || null,
+  };
+}
+
+function formatMoney(
+  amount: number | string | null | undefined,
+  symbol?: string | null,
+  currency?: string | null
+) {
+  const value = Number(amount);
+  if (!Number.isFinite(value)) return null;
+  const normalized = value >= 100 ? value / 100 : value;
+  const currencyCode = currency ? String(currency).toUpperCase() : null;
+  if (currencyCode === "EUR") return `€${normalized}`;
+  if (symbol) return `${symbol}${normalized}`;
+  if (currencyCode) return `${normalized} ${currencyCode}`;
+  return String(normalized);
 }
 
 function insightSentence(row: LatestRow, delta: number | null) {
@@ -326,13 +375,19 @@ export default async function SummaryHealthPage() {
   const atRiskIds = atRiskRows.map((r) => r.location_id);
   const { data: locationRows } = await supabaseAdmin
     .from("ghl_locations")
-    .select("location_id, profile")
+    .select("location_id, profile, subscription")
     .in("location_id", atRiskIds.length ? atRiskIds : ["__none__"]);
   const nameById = new Map<string, string>();
-  for (const row of locationRows || []) {
+  const mrrById = new Map<string, string | null>();
+  for (const row of (locationRows || []) as LocationRow[]) {
     const id = String(row.location_id || "");
     if (!id) continue;
     nameById.set(id, pickLocationName(row.profile, id));
+    const summary = formatSubscription(row.subscription);
+    mrrById.set(
+      id,
+      formatMoney(summary?.mrr, summary?.mrrSymbol, summary?.mrrCurrency)
+    );
   }
 
   const prevDay =
@@ -646,6 +701,7 @@ export default async function SummaryHealthPage() {
                     <th className="py-3 pr-4">Account</th>
                     <th className="py-3 pr-4">Score</th>
                     <th className="py-3 pr-4">Delta</th>
+                    <th className="py-3 pr-4">Value</th>
                     <th className="py-3 pr-4">Signals</th>
                     <th className="py-3 text-right">Action</th>
                   </tr>
@@ -655,6 +711,7 @@ export default async function SummaryHealthPage() {
                     const tier = scoreTier(row.health_score);
                     const name =
                       nameById.get(row.location_id) || row.location_id;
+                    const mrr = mrrById.get(row.location_id) || "n/a";
                     return (
                       <tr key={row.location_id} className="hover:bg-white/[0.02]">
                         <td className="py-4 pr-4">
@@ -689,6 +746,9 @@ export default async function SummaryHealthPage() {
                           {row.delta === null
                             ? "--"
                             : `${row.delta > 0 ? "+" : ""}${row.delta}`}
+                        </td>
+                        <td className="py-4 pr-4 text-zinc-300 font-semibold">
+                          {mrr}
                         </td>
                         <td className="py-4 pr-4 text-xs text-zinc-400">
                           {insightSentence(row, row.delta)}

@@ -74,6 +74,30 @@ function getTrialEndDate(data: any) {
   );
 }
 
+function getCreatedAtDate(subscription: any) {
+  const data = getSubscriptionData(subscription);
+  const plan = data?.plan || subscription?.plan;
+  return (
+    parseDateValue(data?.createdAt) ||
+    parseDateValue(data?.created_at) ||
+    parseDateValue(plan?.createdAt) ||
+    parseDateValue(plan?.created_at)
+  );
+}
+
+function isCreatedOlderThanDays(
+  subscription: any,
+  days: number,
+  now = new Date()
+) {
+  const createdAt = getCreatedAtDate(subscription);
+  if (!createdAt) return false;
+  const diffDays = Math.floor(
+    (now.getTime() - createdAt.getTime()) / MS_PER_DAY
+  );
+  return diffDays > days;
+}
+
 function getTrialLengthDays(subscription: any) {
   const data = getSubscriptionData(subscription);
   if (!data) return null;
@@ -169,6 +193,11 @@ export default async function TrialingPage() {
       if (status !== "trialing") return null;
       trialingTotal += 1;
 
+      if (isCreatedOlderThanDays(row.subscription, 30)) {
+        trialingLong += 1;
+        return null;
+      }
+
       const trialDays = getTrialLengthDays(row.subscription);
       if (trialDays === null) {
         trialingUnknown += 1;
@@ -189,6 +218,7 @@ export default async function TrialingPage() {
         trial_days: trialDays,
         trial_start: getTrialStartDate(data),
         trial_end: getTrialEndDate(data),
+        created_at: getCreatedAtDate(row.subscription),
         status,
       };
     })
@@ -199,6 +229,7 @@ export default async function TrialingPage() {
     trial_days: number;
     trial_start: Date | null;
     trial_end: Date | null;
+    created_at: Date | null;
     status: string;
   }>;
 
@@ -266,6 +297,7 @@ export default async function TrialingPage() {
                     <th className="px-6 py-4">Duree essai</th>
                     <th className="px-6 py-4">Debut</th>
                     <th className="px-6 py-4">Fin</th>
+                    <th className="px-6 py-4">Cree le</th>
                     <th className="px-6 py-4 text-right">Action</th>
                   </tr>
                 </thead>
@@ -294,6 +326,11 @@ export default async function TrialingPage() {
                       <td className="px-6 py-4 text-zinc-400">
                         {row.trial_end
                           ? row.trial_end.toLocaleDateString()
+                          : "n/a"}
+                      </td>
+                      <td className="px-6 py-4 text-zinc-400">
+                        {row.created_at
+                          ? row.created_at.toLocaleDateString()
                           : "n/a"}
                       </td>
                       <td className="px-6 py-4 text-right">
