@@ -74,30 +74,6 @@ function getTrialEndDate(data: any) {
   );
 }
 
-function getCreatedAtDate(subscription: any) {
-  const data = getSubscriptionData(subscription);
-  const plan = data?.plan || subscription?.plan;
-  return (
-    parseDateValue(data?.createdAt) ||
-    parseDateValue(data?.created_at) ||
-    parseDateValue(plan?.createdAt) ||
-    parseDateValue(plan?.created_at)
-  );
-}
-
-function isCreatedOlderThanDays(
-  subscription: any,
-  days: number,
-  now = new Date()
-) {
-  const createdAt = getCreatedAtDate(subscription);
-  if (!createdAt) return false;
-  const diffDays = Math.floor(
-    (now.getTime() - createdAt.getTime()) / MS_PER_DAY
-  );
-  return diffDays > days;
-}
-
 function getTrialLengthDays(subscription: any) {
   const data = getSubscriptionData(subscription);
   if (!data) return null;
@@ -156,19 +132,7 @@ function getPlanName(subscription: any) {
   );
 }
 
-export default async function TrialingPage({
-  searchParams,
-}: {
-  searchParams?: { [key: string]: string | string[] | undefined };
-}) {
-  const sp = searchParams || {};
-  const debug = String(sp.debug || "") === "1";
-  const debugLocationIdRaw = Array.isArray(sp.location_id)
-    ? sp.location_id[0]
-    : sp.location_id;
-  const debugLocationId = debugLocationIdRaw
-    ? String(debugLocationIdRaw)
-    : null;
+export default async function TrialingPage() {
   const { data: locationRowsRaw, error } = await supabaseAdmin
     .from("ghl_locations")
     .select("location_id, profile, subscription");
@@ -188,17 +152,15 @@ export default async function TrialingPage({
     );
   }
 
-  const rowsRaw = (locationRowsRaw || []) as LocationRow[];
-  const rows = debugLocationId
-    ? rowsRaw.filter((row) => row.location_id === debugLocationId)
-    : rowsRaw;
+  const rows = (locationRowsRaw || []) as LocationRow[];
   let trialingTotal = 0;
   let trialingKnown = 0;
   let trialingReal = 0;
   let trialingLong = 0;
+  let trialingOld = 0;
   let trialingUnknown = 0;
 
-  const trialingRows = rows
+  const trialingCandidates = rows
     .map((row) => {
       const data = getSubscriptionData(row.subscription);
       if (!data) return null;
@@ -207,11 +169,6 @@ export default async function TrialingPage({
         .toLowerCase();
       if (status !== "trialing") return null;
       trialingTotal += 1;
-
-      if (isCreatedOlderThanDays(row.subscription, 30)) {
-        trialingLong += 1;
-        return null;
-      }
 
       const trialDays = getTrialLengthDays(row.subscription);
       if (trialDays === null) {
@@ -225,7 +182,6 @@ export default async function TrialingPage({
         return null;
       }
 
-      trialingReal += 1;
       return {
         location_id: row.location_id,
         display_name: pickLocationName(row.profile, row.location_id),
@@ -233,8 +189,6 @@ export default async function TrialingPage({
         trial_days: trialDays,
         trial_start: getTrialStartDate(data),
         trial_end: getTrialEndDate(data),
-        created_at: getCreatedAtDate(row.subscription),
-        subscription: row.subscription,
         status,
       };
     })
@@ -245,10 +199,47 @@ export default async function TrialingPage({
     trial_days: number;
     trial_start: Date | null;
     trial_end: Date | null;
-    created_at: Date | null;
-    subscription: any;
     status: string;
   }>;
+
+  const candidateIds = trialingCandidates.map((row) => row.location_id);
+  const firstSeenByLocation = new Map<string, Date>();
+  if (candidateIds.length) {
+    const { data: firstSeenRaw } = await supabaseAdmin
+      .from("user_last_seen")
+      .select("location_id, last_seen_at")
+      .in("location_id", candidateIds);
+    for (const row of (firstSeenRaw || []) as Array<{
+      location_id: string;
+      last_seen_at: string | null;
+    }>) {
+      const id = String(row.location_id || "");
+      if (!id || !row.last_seen_at) continue;
+      const existing = firstSeenByLocation.get(id);
+      const current = new Date(row.last_seen_at);
+      if (!existing || current.getTime() < existing.getTime()) {
+        firstSeenByLocation.set(id, current);
+      }
+    }
+  }
+
+  const now = new Date();
+  const trialingRows = trialingCandidates.filter((row) => {
+    const firstSeen = firstSeenByLocation.get(row.location_id);
+    if (!firstSeen) {
+      trialingUnknown += 1;
+      return false;
+    }
+    const diffDays = Math.floor(
+      (now.getTime() - firstSeen.getTime()) / MS_PER_DAY
+    );
+    if (diffDays > 30) {
+      trialingOld += 1;
+      return false;
+    }
+    trialingReal += 1;
+    return true;
+  });
 
   trialingRows.sort((a, b) => {
     if (a.trial_days !== b.trial_days) return a.trial_days - b.trial_days;
@@ -267,8 +258,8 @@ export default async function TrialingPage({
               Trialing (&lt;= 30 jours)
             </h1>
             <p className="text-sm text-zinc-500 mt-2 max-w-xl">
-              Liste des vrais trials: status = trialing et duree d&apos;essai
-              &lt;= 30 jours.
+              Liste des vrais trials: status = trialing, duree d&apos;essai
+              &lt;= 30 jours, et first seen &lt;= 30 jours.
             </p>
           </div>
           <div className="flex flex-wrap gap-3 text-xs text-zinc-500">
@@ -291,20 +282,19 @@ export default async function TrialingPage({
               </div>
             </div>
             <div className="bg-white/5 px-4 py-3 rounded-lg border border-white/10">
-              Durée inconnue
+              First seen &gt; 30j
+              <div className="text-sm text-white font-semibold mt-1">
+                {trialingOld}
+              </div>
+            </div>
+            <div className="bg-white/5 px-4 py-3 rounded-lg border border-white/10">
+              Donnees incompletes
               <div className="text-sm text-white font-semibold mt-1">
                 {trialingUnknown}
               </div>
             </div>
           </div>
         </header>
-
-        {debug && (
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-100">
-            Debug actif. Ajoute `?location_id=ID` pour isoler un compte.
-          </div>
-        )}
-
         {trialingRows.length === 0 ? (
           <div className="bg-zinc-900/40 border border-white/5 rounded-xl p-10 text-center text-zinc-500">
             Aucun trialing avec duree connue &lt;= 30 jours.
@@ -320,69 +310,47 @@ export default async function TrialingPage({
                     <th className="px-6 py-4">Duree essai</th>
                     <th className="px-6 py-4">Debut</th>
                     <th className="px-6 py-4">Fin</th>
-                    <th className="px-6 py-4">Cree le</th>
                     <th className="px-6 py-4 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {trialingRows.map((row) => (
-                    <>
-                      <tr key={row.location_id} className="hover:bg-white/[0.02]">
-                        <td className="px-6 py-4">
-                          <div className="text-zinc-200 font-medium truncate max-w-[300px]">
-                            {row.display_name}
-                          </div>
-                          <div className="text-xs text-zinc-600 font-mono mt-1">
-                            {row.location_id}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-zinc-300">{row.plan}</td>
-                        <td className="px-6 py-4">
-                          <span className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-semibold border border-emerald-400/30 text-emerald-200 bg-emerald-500/10">
-                            {row.trial_days} jours
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-zinc-400">
-                          {row.trial_start
-                            ? row.trial_start.toLocaleDateString()
-                            : "n/a"}
-                        </td>
-                        <td className="px-6 py-4 text-zinc-400">
-                          {row.trial_end
-                            ? row.trial_end.toLocaleDateString()
-                            : "n/a"}
-                        </td>
-                        <td className="px-6 py-4 text-zinc-400">
-                          {row.created_at
-                            ? row.created_at.toLocaleDateString()
-                            : "n/a"}
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <a
-                            href={`/locations/${encodeURIComponent(
-                              row.location_id
-                            )}`}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-white/5 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-white/10 hover:border-white/20 transition-all"
-                          >
-                            Ouvrir
-                          </a>
-                        </td>
-                      </tr>
-                      {debug && (
-                        <tr className="bg-black/30">
-                          <td colSpan={7} className="px-6 py-4">
-                            <details className="text-xs text-zinc-400">
-                              <summary className="cursor-pointer text-zinc-300">
-                                Payload subscription
-                              </summary>
-                              <pre className="mt-3 whitespace-pre-wrap rounded-lg border border-white/5 bg-black/40 p-3 text-[11px] text-zinc-300">
-                                {JSON.stringify(row.subscription, null, 2)}
-                              </pre>
-                            </details>
-                          </td>
-                        </tr>
-                      )}
-                    </>
+                    <tr key={row.location_id} className="hover:bg-white/[0.02]">
+                      <td className="px-6 py-4">
+                        <div className="text-zinc-200 font-medium truncate max-w-[300px]">
+                          {row.display_name}
+                        </div>
+                        <div className="text-xs text-zinc-600 font-mono mt-1">
+                          {row.location_id}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-zinc-300">{row.plan}</td>
+                      <td className="px-6 py-4">
+                        <span className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-semibold border border-emerald-400/30 text-emerald-200 bg-emerald-500/10">
+                          {row.trial_days} jours
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-zinc-400">
+                        {row.trial_start
+                          ? row.trial_start.toLocaleDateString()
+                          : "n/a"}
+                      </td>
+                      <td className="px-6 py-4 text-zinc-400">
+                        {row.trial_end
+                          ? row.trial_end.toLocaleDateString()
+                          : "n/a"}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <a
+                          href={`/locations/${encodeURIComponent(
+                            row.location_id
+                          )}`}
+                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-white/5 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-white/10 hover:border-white/20 transition-all"
+                        >
+                          Ouvrir
+                        </a>
+                      </td>
+                    </tr>
                   ))}
                 </tbody>
               </table>
@@ -397,3 +365,6 @@ export default async function TrialingPage({
     </main>
   );
 }
+
+
+

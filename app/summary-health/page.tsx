@@ -69,13 +69,14 @@ function toDateString(d: Date) {
 }
 
 function sparkPoints(data: number[]) {
-  if (!data.length) return "";
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  const values = data.filter((value) => Number.isFinite(value));
+  if (values.length < 2) return "0,50 100,50";
+  const min = Math.min(...values);
+  const max = Math.max(...values);
   const range = Math.max(1, max - min);
-  return data
+  return values
     .map((v, i) => {
-      const x = (i / Math.max(1, data.length - 1)) * 100;
+      const x = (i / Math.max(1, values.length - 1)) * 100;
       const y = 100 - ((v - min) / range) * 100;
       return `${x},${y}`;
     })
@@ -827,6 +828,8 @@ export default async function SummaryHealthPage() {
                       fill="none"
                       stroke="rgba(16,185,129,0.7)"
                       strokeWidth="3"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
                       points={sparkPoints(item.series)}
                     />
                   </svg>
