@@ -32,6 +32,11 @@ type DailyAgg = {
   riskCount: number;
 };
 
+type LastSeenRow = {
+  location_id: string;
+  last_seen_at: string | null;
+};
+
 const DAYS = 14;
 
 function scoreTier(score: number | null) {
@@ -78,6 +83,13 @@ function riskReasons(row: LatestRow) {
   if (row.trend_score <= 5) tags.push("Negative trend");
   if (!tags.length) tags.push("Score drop");
   return tags.slice(0, 3);
+}
+
+function insightSentence(row: LatestRow, delta: number | null) {
+  const reasons = riskReasons(row);
+  const deltaPart =
+    delta === null ? "Score change unavailable" : `Score ${delta > 0 ? "+" : ""}${delta} vs yesterday`;
+  return `${deltaPart}. ${reasons.join(", ")}.`;
 }
 
 export default async function SummaryHealthPage() {
@@ -157,6 +169,37 @@ export default async function SummaryHealthPage() {
       .gte("score_day", startDay)
       .lte("score_day", latestDay);
     dailyRows.push(...((dailyRaw || []) as DailyRow[]));
+  }
+
+  const { data: lastSeenRaw } = await supabaseAdmin
+    .from("user_last_seen")
+    .select("location_id, last_seen_at");
+  const lastSeenRows = (lastSeenRaw || []) as LastSeenRow[];
+
+  const lastSeenByLocation = new Map<string, string | null>();
+  for (const row of lastSeenRows) {
+    const id = String(row.location_id || "");
+    if (!id) continue;
+    const prev = lastSeenByLocation.get(id);
+    if (!prev) {
+      lastSeenByLocation.set(id, row.last_seen_at ?? null);
+      continue;
+    }
+    const prevTs = prev ? new Date(prev).getTime() : 0;
+    const currTs = row.last_seen_at ? new Date(row.last_seen_at).getTime() : 0;
+    if (currTs > prevTs) lastSeenByLocation.set(id, row.last_seen_at ?? prev);
+  }
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 7);
+  let noLogin7dCount = 0;
+  for (const row of latestRows) {
+    const lastSeen = lastSeenByLocation.get(row.location_id);
+    if (!lastSeen) {
+      noLogin7dCount += 1;
+      continue;
+    }
+    if (new Date(lastSeen).getTime() < cutoff.getTime()) noLogin7dCount += 1;
   }
 
   const avgHealth =
@@ -251,6 +294,31 @@ export default async function SummaryHealthPage() {
   const avgDelta =
     latestAvg !== null && prevAvg !== null ? latestAvg - prevAvg : null;
 
+  const latestRisk = riskSeries.length ? riskSeries[riskSeries.length - 1] : null;
+  const prevRisk =
+    riskSeries.length > 1 ? riskSeries[riskSeries.length - 2] : null;
+  const riskDelta =
+    latestRisk !== null && prevRisk !== null ? latestRisk - prevRisk : null;
+
+  const lastTwoDays =
+    daysSorted.length >= 2
+      ? [daysSorted[daysSorted.length - 2], daysSorted[daysSorted.length - 1]]
+      : [null, null];
+  const prevDayKey = lastTwoDays[0];
+  const latestDayKey = lastTwoDays[1];
+
+  let drop10Count = 0;
+  if (prevDayKey && latestDayKey) {
+    for (const row of latestRows) {
+      const locDays = byLocation.get(row.location_id);
+      const prev = locDays?.get(prevDayKey) ?? null;
+      const curr = locDays?.get(latestDayKey) ?? null;
+      if (typeof prev === "number" && typeof curr === "number" && curr - prev <= -10) {
+        drop10Count += 1;
+      }
+    }
+  }
+
   const atRiskRows = [...latestRows]
     .sort((a, b) => a.health_score - b.health_score)
     .slice(0, 8);
@@ -317,8 +385,84 @@ export default async function SummaryHealthPage() {
           </div>
         </header>
 
+        <section className="grid gap-4 md:grid-cols-4">
+          {[
+            {
+              label: "Total locations",
+              value: totalLocations,
+              href: "/locations",
+              tone: "bg-white/5",
+            },
+            {
+              label: "At-risk share",
+              value: `${tierPct.risk}%`,
+              href: "/locations?risk=1",
+              tone: "bg-red-500/10",
+            },
+            {
+              label: "Drop > 10",
+              value: drop10Count,
+              href: "/locations?drop=10",
+              tone: "bg-amber-500/10",
+            },
+            {
+              label: "No login 7d",
+              value: noLogin7dCount,
+              href: "/locations?no_login_7d=1",
+              tone: "bg-sky-500/10",
+            },
+          ].map((item) => (
+            <a
+              key={item.label}
+              href={item.href}
+              className={`group rounded-xl border border-white/5 ${item.tone} p-4 transition hover:border-white/20`}
+            >
+              <div className="text-xs uppercase tracking-[0.2em] text-zinc-500">
+                {item.label}
+              </div>
+              <div className="mt-3 text-2xl font-bold text-white">
+                {item.value}
+              </div>
+              <div className="mt-1 text-xs text-zinc-500 group-hover:text-zinc-300">
+                Open filtered list
+              </div>
+            </a>
+          ))}
+        </section>
+
+        <section className="rounded-2xl border border-white/5 bg-zinc-900/60 p-6">
+          <div className="text-xs uppercase tracking-[0.3em] text-zinc-500">
+            TL;DR
+          </div>
+          <div className="mt-4 space-y-2 text-sm text-zinc-300">
+            <div>
+              Average health{" "}
+              <span className="font-semibold text-white">
+                {avgDelta === null ? "stable" : avgDelta >= 0 ? `+${avgDelta}` : avgDelta}
+              </span>{" "}
+              vs previous day.
+            </div>
+            <div>
+              At-risk share{" "}
+              <span className="font-semibold text-white">
+                {latestRisk === null ? `${tierPct.risk}%` : `${latestRisk}%`}
+              </span>{" "}
+              {riskDelta === null
+                ? "today."
+                : `(${riskDelta > 0 ? "+" : ""}${riskDelta} pts vs yesterday).`}
+            </div>
+            <div>
+              {drop10Count} accounts dropped more than 10 points;{" "}
+              {noLogin7dCount} with no login in 7 days.
+            </div>
+          </div>
+        </section>
+
         <section className="grid gap-6 lg:grid-cols-3">
-          <div className="relative overflow-hidden rounded-2xl border border-white/5 bg-zinc-900/60 p-6">
+          <a
+            href="/locations"
+            className="relative overflow-hidden rounded-2xl border border-white/5 bg-zinc-900/60 p-6 transition hover:border-white/20"
+          >
             <div
               className="absolute inset-0 opacity-40"
               style={{
@@ -391,9 +535,12 @@ export default async function SummaryHealthPage() {
                 </div>
               </div>
             </div>
-          </div>
+          </a>
 
-          <div className="rounded-2xl border border-white/5 bg-zinc-900/60 p-6">
+          <a
+            href="/locations?sort=asc"
+            className="rounded-2xl border border-white/5 bg-zinc-900/60 p-6 transition hover:border-white/20"
+          >
             <div className="text-xs uppercase tracking-[0.3em] text-zinc-500">
               Average health
             </div>
@@ -443,9 +590,12 @@ export default async function SummaryHealthPage() {
                 ))}
               </div>
             </div>
-          </div>
+          </a>
 
-          <div className="rounded-2xl border border-white/5 bg-zinc-900/60 p-6">
+          <a
+            href="/locations"
+            className="rounded-2xl border border-white/5 bg-zinc-900/60 p-6 transition hover:border-white/20"
+          >
             <div className="text-xs uppercase tracking-[0.3em] text-zinc-500">
               Coverage
             </div>
@@ -471,7 +621,7 @@ export default async function SummaryHealthPage() {
                 Health computed for all active locations.
               </div>
             </div>
-          </div>
+          </a>
         </section>
 
         <section className="grid gap-6 lg:grid-cols-[2fr_1fr]">
@@ -540,17 +690,8 @@ export default async function SummaryHealthPage() {
                             ? "--"
                             : `${row.delta > 0 ? "+" : ""}${row.delta}`}
                         </td>
-                        <td className="py-4 pr-4">
-                          <div className="flex flex-wrap gap-2">
-                            {riskReasons(row).map((tag) => (
-                              <span
-                                key={tag}
-                                className="text-[11px] px-2 py-1 rounded-md bg-white/5 text-zinc-400 border border-white/10"
-                              >
-                                {tag}
-                              </span>
-                            ))}
-                          </div>
+                        <td className="py-4 pr-4 text-xs text-zinc-400">
+                          {insightSentence(row, row.delta)}
                         </td>
                         <td className="py-4 text-right">
                           <a
@@ -583,27 +724,32 @@ export default async function SummaryHealthPage() {
                   label: "Avg health",
                   value: latestAvg ?? avgHealth,
                   series: avgSeries,
+                  href: "/locations",
                 },
                 {
                   label: "Login score",
                   value: loginSeries[loginSeries.length - 1] ?? avgLogin,
                   series: loginSeries,
+                  href: "/locations?no_login_7d=1",
                 },
                 {
                   label: "Feature score",
                   value: featureSeries[featureSeries.length - 1] ?? avgFeatures,
                   series: featureSeries,
+                  href: "/locations?drop=10",
                 },
                 {
                   label: "At-risk share",
                   value: riskSeries[riskSeries.length - 1] ?? tierPct.risk,
                   series: riskSeries,
                   suffix: "%",
+                  href: "/locations?risk=1",
                 },
               ].map((item) => (
-                <div
+                <a
                   key={item.label}
-                  className="rounded-xl border border-white/5 bg-black/30 px-4 py-3"
+                  href={item.href}
+                  className="rounded-xl border border-white/5 bg-black/30 px-4 py-3 transition hover:border-white/20"
                 >
                   <div className="flex items-center justify-between text-xs text-zinc-500">
                     <span>{item.label}</span>
@@ -624,7 +770,7 @@ export default async function SummaryHealthPage() {
                       points={sparkPoints(item.series)}
                     />
                   </svg>
-                </div>
+                </a>
               ))}
             </div>
           </div>

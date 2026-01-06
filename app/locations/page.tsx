@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { fmtSec, healthColor } from "@/lib/ui";
+import SavedViews from "./saved-views";
 
 // --- Types & Helpers ---
 
@@ -10,6 +11,9 @@ type Row = { location_id: string; last_seen_at: string | null; email: string | n
 type HealthRow = {
   location_id: string;
   health_score: number;
+  login_score: number;
+  features_score: number;
+  trend_score: number;
   score_day: string;
   computed_at: string;
 };
@@ -69,6 +73,17 @@ function buildPageUrl(params: URLSearchParams, offset: number) {
   return `/locations${qs ? `?${qs}` : ""}`;
 }
 
+function buildFilterUrl(params: URLSearchParams, patch: Record<string, string | null>) {
+  const next = new URLSearchParams(params);
+  for (const [key, value] of Object.entries(patch)) {
+    if (!value) next.delete(key);
+    else next.set(key, value);
+  }
+  next.delete("offset");
+  const qs = next.toString();
+  return `/locations${qs ? `?${qs}` : ""}`;
+}
+
 // --- Components ---
 
 const SearchInput = (props: React.InputHTMLAttributes<HTMLInputElement>) => (
@@ -104,9 +119,48 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
   const qRaw = String(sp.q || "");
   const q = qRaw.trim().toLowerCase();
   const riskOnly = String(sp.risk || "") === "1";
+  const dropMin = Math.max(Number(sp.drop || 0), 0);
+  const noLogin7d = String(sp.no_login_7d || "") === "1";
   const sortDir = (sp.sort === "asc" || sp.sort === "desc")
     ? sp.sort
     : (riskOnly ? "asc" : "desc");
+
+  let dropLocationIds: string[] | null = null;
+  if (dropMin > 0) {
+    const { data: lastDays } = await supabaseAdmin
+      .from("location_health_daily")
+      .select("score_day")
+      .order("score_day", { ascending: false })
+      .limit(2);
+    const latestDay = lastDays?.[0]?.score_day || null;
+    const prevDay = lastDays?.[1]?.score_day || null;
+    if (latestDay && prevDay) {
+      const { data: deltaRows } = await supabaseAdmin
+        .from("location_health_daily")
+        .select("location_id, score_day, health_score")
+        .in("score_day", [prevDay, latestDay]);
+      const byLocation = new Map<string, { prev?: number; curr?: number }>();
+      for (const row of deltaRows || []) {
+        const id = String(row.location_id || "");
+        if (!id) continue;
+        if (!byLocation.has(id)) byLocation.set(id, {});
+        const entry = byLocation.get(id)!;
+        if (row.score_day === prevDay) entry.prev = Number(row.health_score || 0);
+        if (row.score_day === latestDay) entry.curr = Number(row.health_score || 0);
+      }
+      dropLocationIds = [];
+      for (const [id, entry] of byLocation.entries()) {
+        if (typeof entry.prev === "number" && typeof entry.curr === "number") {
+          if (entry.curr - entry.prev <= -dropMin) dropLocationIds.push(id);
+        }
+      }
+    } else {
+      dropLocationIds = [];
+    }
+  }
+  const dropIdsForQuery = dropLocationIds
+    ? (dropLocationIds.length ? dropLocationIds : ["__none__"])
+    : null;
 
   // 1) load scored locations (paged) from location_health_latest
   let scoredCount = 0;
@@ -115,6 +169,7 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
       .from("location_health_latest")
       .select("location_id", { count: "exact", head: true });
     if (riskOnly) countQuery = countQuery.lt("health_score", 45);
+    if (dropIdsForQuery) countQuery = countQuery.in("location_id", dropIdsForQuery);
     const { count, error: countError } = await countQuery;
     if (countError) {
       return (
@@ -131,11 +186,12 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
 
   let pageQuery = supabaseAdmin
     .from("location_health_latest")
-    .select("location_id, health_score, score_day, computed_at")
+    .select("location_id, health_score, login_score, features_score, trend_score, score_day, computed_at")
     .order("health_score", { ascending: sortDir === "asc" })
     .order("location_id", { ascending: true })
     .range(offset, offset + limit - 1);
   if (riskOnly) pageQuery = pageQuery.lt("health_score", 45);
+  if (dropIdsForQuery) pageQuery = pageQuery.in("location_id", dropIdsForQuery);
   const { data: scoredRows, error: scoredError } = await pageQuery;
 
   if (scoredError) {
@@ -155,7 +211,7 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
 
   let missingIds: string[] = [];
   let missingCount: number | null = null;
-  const needMissing = !riskOnly && (offset + limit) > scoredCount;
+  const needMissing = !riskOnly && dropMin === 0 && (offset + limit) > scoredCount;
   if (needMissing) {
     const { data: allLocations, error: allLocationsError } = await supabaseAdmin
       .from("ghl_locations")
@@ -356,6 +412,12 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
 
   const filtered = viewRows.filter((r) => {
     if (q && !r.location_id.toLowerCase().includes(q) && !r.display_name.toLowerCase().includes(q)) return false;
+    if (noLogin7d) {
+      if (!r.last_seen_at) return true;
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 7);
+      if (new Date(r.last_seen_at).getTime() >= cutoff.getTime()) return false;
+    }
     return true;
   });
 
@@ -364,6 +426,8 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
   if (riskOnly) params.set("risk", "1");
   if (sortDir) params.set("sort", sortDir);
   if (limit !== 50) params.set("limit", String(limit));
+  if (dropMin > 0) params.set("drop", String(dropMin));
+  if (noLogin7d) params.set("no_login_7d", "1");
 
   const prevOffset = Math.max(0, offset - limit);
   const nextOffset = offset + limit;
@@ -406,6 +470,11 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
                 <option value="">All locations</option>
                 <option value="1">Risk only (score &lt; 45)</option>
              </Select>
+             <Select name="drop" defaultValue={dropMin ? String(dropMin) : ""}>
+                <option value="">No drop filter</option>
+                <option value="10">Drop &gt; 10</option>
+                <option value="15">Drop &gt; 15</option>
+              </Select>
            </div>
 
            <div className="flex items-center gap-3 w-full lg:w-auto justify-end ml-auto pl-2 border-t lg:border-t-0 border-white/5 pt-3 lg:pt-0">
@@ -423,6 +492,42 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
               </a>
            </div>
         </form>
+
+        <div className="flex flex-col lg:flex-row gap-4 lg:items-center justify-between">
+          <div className="flex flex-wrap gap-2">
+            <a
+              href={buildFilterUrl(params, { risk: "1" })}
+              className={`px-3 py-1 rounded-full text-xs border transition ${
+                riskOnly ? "border-red-400/40 bg-red-500/10 text-red-200" : "border-white/10 text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              At-risk
+            </a>
+            <a
+              href={buildFilterUrl(params, { drop: "10" })}
+              className={`px-3 py-1 rounded-full text-xs border transition ${
+                dropMin >= 10 ? "border-amber-400/40 bg-amber-500/10 text-amber-200" : "border-white/10 text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              Drop &gt; 10
+            </a>
+            <a
+              href={buildFilterUrl(params, { no_login_7d: "1" })}
+              className={`px-3 py-1 rounded-full text-xs border transition ${
+                noLogin7d ? "border-sky-400/40 bg-sky-500/10 text-sky-200" : "border-white/10 text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              No login 7d
+            </a>
+            <a
+              href={buildFilterUrl(params, { risk: null, drop: null, no_login_7d: null })}
+              className="px-3 py-1 rounded-full text-xs border border-white/10 text-zinc-400 hover:text-zinc-200 transition"
+            >
+              Clear filters
+            </a>
+          </div>
+          <SavedViews />
+        </div>
 
         {/* --- DATA TABLE --- */}
         <div className="bg-zinc-900/40 border border-white/5 rounded-xl overflow-hidden backdrop-blur-sm shadow-xl shadow-black/20">

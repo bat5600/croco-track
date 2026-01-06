@@ -79,6 +79,12 @@ export default function RootLayout({
                   >
                     Product Adoption
                   </Link>
+                  <Link
+                    href="/trialing"
+                    className="block rounded-md px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-white/5 hover:text-white"
+                  >
+                    Trialing
+                  </Link>
                 </div>
               </details>
               <Link
