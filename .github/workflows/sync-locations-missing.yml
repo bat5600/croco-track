@@ -1,0 +1,24 @@
+name: Sync missing GHL locations
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call sync-locations-missing endpoint
+        env:
+          BASE_URL: ${{ secrets.CROCO_TRACK_BASE_URL }}
+          INTERNAL_API_KEY: ${{ secrets.CROCO_INTERNAL_API_KEY }}
+        run: |
+          if [ -z "$BASE_URL" ] || [ -z "$INTERNAL_API_KEY" ]; then
+            echo "Missing CROCO_TRACK_BASE_URL or CROCO_INTERNAL_API_KEY secrets." >&2
+            exit 1
+          fi
+          curl -sS -X POST "$BASE_URL/api/internal/external/sync-locations-missing" \
+            -H "Content-Type: application/json" \
+            -H "x-internal-key: $INTERNAL_API_KEY" \
+            --data '{"limit":2000,"pageSize":500}'

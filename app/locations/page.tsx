@@ -3,6 +3,16 @@ export const dynamic = "force-dynamic";
 
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { fmtSec, healthColor } from "@/lib/ui";
+import {
+  displayScore,
+  LOGIN_DAYS_WINDOW,
+  loginDaysFromScore,
+  normalizeScore,
+  NO_DATA_LABEL,
+  pctFromScore,
+  scoreToColor,
+  scoreToStatus,
+} from "@/lib/health";
 import SavedViews from "./saved-views";
 
 // --- Types & Helpers ---
@@ -24,8 +34,8 @@ type ViewRow = {
   last_seen_at: string | null;
   total_sec: number;
   total_pct: number;
-  login_days_7: number;
-  login_activity_pct: number;
+  login_score: number | null;
+  login_score_pct: number;
   health_score: number | null;
   health_status: string;
   health_pct: number;
@@ -48,22 +58,6 @@ function pickLocationName(profile: any, fallback: string) {
     profile?.companyName ||
     fallback
   );
-}
-
-function scoreToStatus(score: number | null) {
-  if (score === null) return "Not computed";
-  if (score >= 80) return "Thriving";
-  if (score >= 60) return "Healthy";
-  if (score >= 45) return "Steady";
-  return "At-risk";
-}
-
-function scoreToColor(score: number | null): string | undefined {
-  if (score === null) return undefined;
-  if (score >= 80) return "dark_green";
-  if (score >= 60) return "light_green";
-  if (score >= 45) return "yellow";
-  return "red";
 }
 
 function buildPageUrl(params: URLSearchParams, offset: number) {
@@ -280,7 +274,7 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
     );
   }
 
-  // 2) last seen + login activity (7d via gocroco_user_health_v2)
+  // 2) last seen
   const { data: lastSeenRows, error: lastSeenError } = await supabaseAdmin
     .from("user_last_seen")
     .select("location_id, last_seen_at, email")
@@ -298,7 +292,6 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
   }
 
   const lastSeenByLocation = new Map<string, Row>();
-  const userEmailsByLocation = new Map<string, Set<string>>();
   for (const r of lastSeenRows || []) {
     const id = String(r.location_id || "");
     if (!id) continue;
@@ -316,36 +309,7 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
       if (b > a) prev.last_seen_at = r.last_seen_at ?? prev.last_seen_at;
     }
 
-    const email = r.email ? String(r.email) : "";
-    if (email) {
-      if (!userEmailsByLocation.has(id)) userEmailsByLocation.set(id, new Set());
-      userEmailsByLocation.get(id)?.add(email);
-    }
   }
-
-  const MAX_USERS_PER_LOCATION = 50;
-  const loginDaysByLocation = new Map<string, number>();
-  await Promise.all(
-    pageLocationIds.map(async (locationId) => {
-      const emails = Array.from(userEmailsByLocation.get(locationId) || []).slice(0, MAX_USERS_PER_LOCATION);
-      if (!emails.length) {
-        loginDaysByLocation.set(locationId, 0);
-        return;
-      }
-      const healthList = await Promise.all(
-        emails.map(async (email) => {
-          const { data: health } = await supabaseAdmin.rpc("gocroco_user_health_v2", {
-            target_email: email,
-            target_location_id: locationId,
-            ref_day: null,
-          });
-          return health;
-        })
-      );
-      const maxDays = Math.max(0, ...healthList.map((h) => Number(h?.login?.days7 || 0)));
-      loginDaysByLocation.set(locationId, maxDays);
-    })
-  );
 
   // 3) lifetime totals by location
   const ids = pageLocationIds;
@@ -391,12 +355,12 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
   const viewRows: ViewRow[] = pageLocationIds.map((locationId) => {
     const total = totals.get(locationId) || 0;
     const health = healthById.get(locationId);
-    const score = typeof health?.health_score === "number" ? Math.round(health.health_score) : null;
+    const score = normalizeScore(health?.health_score);
     const status = scoreToStatus(score);
     const color = scoreToColor(score);
-    const days7 = loginDaysByLocation.get(locationId) || 0;
-    const loginDaysCapped = Math.min(5, days7);
-    const loginPct = Math.round((loginDaysCapped / 5) * 100);
+    const loginScore = normalizeScore(health?.login_score);
+    const loginDays = loginDaysFromScore(loginScore);
+    const loginPct = pctFromScore(loginDays, LOGIN_DAYS_WINDOW);
     const displayName = nameMap.get(locationId) || locationId;
     const lastSeen = lastSeenByLocation.get(locationId)?.last_seen_at ?? null;
     return {
@@ -405,11 +369,11 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
       last_seen_at: lastSeen,
       total_sec: total,
       total_pct: toPct(total, maxTotal),
-      login_days_7: days7,
-      login_activity_pct: loginPct,
+      login_score: loginDays,
+      login_score_pct: loginPct,
       health_score: score,
       health_status: status,
-      health_pct: score === null ? 0 : Math.max(0, Math.min(100, score)),
+      health_pct: pctFromScore(score, 100),
       health_color: color,
       score_day: health?.score_day ?? null,
       computed_at: health?.computed_at ?? null,
@@ -546,7 +510,7 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
                   </th>
                   <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Location</th>
                   <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-40">Last Updated</th>
-                  <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-56">Login Activity (7d)</th>
+                  <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-56">Login Days (7d)</th>
                   <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-56">Lifetime Time</th>
                   <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-64">Health Status</th>
                   <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider text-right w-24">Actions</th>
@@ -556,10 +520,13 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
                 {filtered.map((l) => {
                   const badge = healthColor(l.health_color);
                   const healthLabel = l.health_score === null
-                    ? "Not computed"
+                    ? NO_DATA_LABEL
                     : `${l.health_status} ${l.health_score}%`;
                   const scoreDayLabel = l.score_day ? new Date(l.score_day).toLocaleDateString() : "n/a";
                   const computedAtLabel = l.computed_at ? new Date(l.computed_at).toLocaleString() : "n/a";
+                  const loginLabel = l.login_score === null
+                    ? NO_DATA_LABEL
+                    : `${displayScore(l.login_score)}/${LOGIN_DAYS_WINDOW} days`;
                   
                   return (
                     <tr key={l.location_id} className="group hover:bg-white/[0.02] transition-colors">
@@ -596,12 +563,12 @@ export default async function LocationsPage({ searchParams }: { searchParams?: a
                       <td className="px-6 py-4">
                          <div className="flex flex-col gap-2">
                              <div className="flex justify-between items-baseline text-xs">
-                                 <span className="font-semibold text-zinc-300">{Math.min(5, l.login_days_7)}<span className="text-zinc-600 font-normal">/5 days</span></span>
-                                 <span className="text-zinc-500 font-mono text-[10px]">{l.login_activity_pct}%</span>
+                                 <span className="font-semibold text-zinc-300">{loginLabel}</span>
+                                 <span className="text-zinc-500 font-mono text-[10px]">{l.login_score_pct}%</span>
                              </div>
                              <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden w-full max-w-[140px]">
                                 <div 
-                                  style={{ width: `${l.login_activity_pct}%` }} 
+                                  style={{ width: `${l.login_score_pct}%` }} 
                                   className="h-full bg-emerald-500 rounded-full opacity-80 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
                                 />
                              </div>

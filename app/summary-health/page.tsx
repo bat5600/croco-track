@@ -3,6 +3,14 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import {
+  FEATURES_SCORE_MAX,
+  LOGIN_DAYS_WINDOW,
+  loginDaysFromScore,
+  NO_DATA_LABEL,
+  TREND_SCORE_MAX,
+  pctFromScore,
+} from "@/lib/health";
 
 type LatestRow = {
   location_id: string;
@@ -46,7 +54,7 @@ type LocationRow = {
 const DAYS = 14;
 
 function scoreTier(score: number | null) {
-  if (score === null) return { label: "Not computed", tone: "zinc" as const };
+  if (score === null) return { label: NO_DATA_LABEL, tone: "zinc" as const };
   if (score >= 80) return { label: "Thriving", tone: "emerald" as const };
   if (score >= 60) return { label: "Healthy", tone: "lime" as const };
   if (score >= 45) return { label: "Steady", tone: "amber" as const };
@@ -257,11 +265,12 @@ export default async function SummaryHealthPage() {
       latestRows.reduce((acc, r) => acc + (r.health_score || 0), 0) /
         totalLocations
     ) || 0;
-  const avgLogin =
+  const avgLoginScore =
     Math.round(
       latestRows.reduce((acc, r) => acc + (r.login_score || 0), 0) /
         totalLocations
     ) || 0;
+  const avgLogin = loginDaysFromScore(avgLoginScore) ?? 0;
   const avgFeatures =
     Math.round(
       latestRows.reduce((acc, r) => acc + (r.features_score || 0), 0) /
@@ -323,9 +332,10 @@ export default async function SummaryHealthPage() {
   const avgSeries = daysSorted.map((d) =>
     Math.round((dailyAgg.get(d)!.sum / dailyAgg.get(d)!.count) || 0)
   );
-  const loginSeries = daysSorted.map((d) =>
-    Math.round((dailyAgg.get(d)!.loginSum / dailyAgg.get(d)!.count) || 0)
-  );
+  const loginSeries = daysSorted.map((d) => {
+    const score = Math.round((dailyAgg.get(d)!.loginSum / dailyAgg.get(d)!.count) || 0);
+    return loginDaysFromScore(score) ?? 0;
+  });
   const featureSeries = daysSorted.map((d) =>
     Math.round((dailyAgg.get(d)!.featuresSum / dailyAgg.get(d)!.count) || 0)
   );
@@ -407,7 +417,7 @@ export default async function SummaryHealthPage() {
         month: "short",
         day: "numeric",
       })
-    : "n/a";
+    : NO_DATA_LABEL;
 
   return (
     <main className="min-h-screen bg-black text-zinc-300 font-sans p-6 md:p-10 selection:bg-emerald-500/20">
@@ -514,6 +524,27 @@ export default async function SummaryHealthPage() {
           </div>
         </section>
 
+        <section className="rounded-2xl border border-white/5 bg-zinc-900/60 p-6">
+          <div className="text-xs uppercase tracking-[0.3em] text-zinc-500">
+            Scoring notes
+          </div>
+          <div className="mt-4 space-y-2 text-sm text-zinc-300">
+            <div>
+              Scores are computed daily by Supabase and stored in{" "}
+              <span className="font-semibold text-white">location_health_latest</span>.
+            </div>
+            <div>
+              Health status tiers: Thriving (>= 80), Healthy (>= 60), Steady (>= 45), At-risk (&lt; 45).
+            </div>
+            <div>
+              Login days (7d) counts unique active days; scores are capped at 5 days.
+            </div>
+            <div>
+              Product adoption uses the <span className="font-semibold text-white">features_score</span> column.
+            </div>
+          </div>
+        </section>
+
         <section className="grid gap-6 lg:grid-cols-3">
           <a
             href="/locations"
@@ -614,18 +645,21 @@ export default async function SummaryHealthPage() {
               <div className="flex-1 space-y-4">
                 {[
                   {
-                    label: "Login score",
+                    label: "Login days (7d)",
                     value: avgLogin,
+                    pct: pctFromScore(avgLogin, LOGIN_DAYS_WINDOW),
                     color: "bg-emerald-500",
                   },
                   {
                     label: "Feature score",
                     value: avgFeatures,
+                    pct: pctFromScore(avgFeatures, FEATURES_SCORE_MAX),
                     color: "bg-sky-500",
                   },
                   {
                     label: "Trend score",
                     value: avgTrend,
+                    pct: pctFromScore(avgTrend, TREND_SCORE_MAX),
                     color: "bg-amber-500",
                   },
                 ].map((item) => (
@@ -639,7 +673,7 @@ export default async function SummaryHealthPage() {
                     <div className="h-2 bg-zinc-800 rounded-full overflow-hidden mt-2">
                       <div
                         className={`h-full ${item.color}`}
-                        style={{ width: `${Math.min(100, item.value)}%` }}
+                        style={{ width: `${item.pct}%` }}
                       />
                     </div>
                   </div>
@@ -788,7 +822,7 @@ export default async function SummaryHealthPage() {
                   href: "/locations",
                 },
                 {
-                  label: "Login score",
+                  label: "Login days (7d)",
                   value: loginSeries[loginSeries.length - 1] ?? avgLogin,
                   series: loginSeries,
                   href: "/locations?no_login_7d=1",

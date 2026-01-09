@@ -9,6 +9,16 @@ import {
   getFeatureLabel,
 } from "@/lib/featureAggregation";
 import { fmtSec, healthColor, trendIcon, riskTags } from "@/lib/ui";
+import {
+  displayScore,
+  FEATURES_SCORE_MAX,
+  loginDaysFromScore,
+  normalizeScore,
+  NO_DATA_LABEL,
+  pctFromScore,
+  scoreToColor,
+  scoreToStatus,
+} from "@/lib/health";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import SyncLocationForm from "./SyncLocationForm";
@@ -92,76 +102,20 @@ function formatMoney(
   return String(normalized);
 }
 
-// --- CONSTANTS DE STYLE (Linear Theme) ---
-const THEME = {
-  bg: "#000000",
-  textMain: "#e4e4e7", // zinc-200
-  textMuted: "#71717a", // zinc-500
-  textDark: "#3f3f46", // zinc-700
-  border: "rgba(255, 255, 255, 0.08)",
-  cardBg: "rgba(24, 24, 27, 0.4)", // zinc-900 with opacity
-  cardHover: "rgba(39, 39, 42, 0.5)",
-  accent: "#10b981", // emerald-500
-  barBg: "rgba(255,255,255,0.1)",
-  fontSans: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-  fontMono: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-};
-
-// Styles objets reutilisables
-const S = {
-  page: {
-    minHeight: "100vh",
-    backgroundColor: THEME.bg,
-    color: THEME.textMuted,
-    fontFamily: THEME.fontSans,
-    padding: "40px",
-    boxSizing: "border-box" as const,
-  },
-  container: {
-    maxWidth: "1280px",
-    margin: "0 auto",
-  },
-  card: {
-    backgroundColor: THEME.cardBg,
-    border: `1px solid ${THEME.border}`,
-    borderRadius: "12px",
-    padding: "20px",
-    backdropFilter: "blur(4px)",
-    WebkitBackdropFilter: "blur(4px)",
-  },
-  sectionTitle: {
-    fontSize: "14px",
-    fontWeight: 600,
-    color: "#fff",
-    letterSpacing: "-0.01em",
-    margin: 0,
-  },
-  sectionSubtitle: {
-    fontSize: "12px",
-    color: THEME.textMuted,
-  },
-  badge: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "6px",
-    padding: "4px 10px",
-    borderRadius: "999px",
-    fontSize: "12px",
-    fontWeight: 500,
-    border: "1px solid rgba(255,255,255,0.1)",
-  },
-  linkReset: {
-    textDecoration: "none",
-    color: "inherit",
-  },
-};
-
 // --- COMPOSANTS UI ---
 
-const StatusBadge = ({ label, colorObj, icon }: { label: string | number; colorObj?: any; icon?: any }) => (
+const StatusBadge = ({
+  label,
+  colorObj,
+  icon,
+}: {
+  label: string | number;
+  colorObj?: any;
+  icon?: any;
+}) => (
   <span
+    className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-2.5 py-1 text-xs font-medium"
     style={{
-      ...S.badge,
       backgroundColor: colorObj?.bg || "rgba(255,255,255,0.05)",
       color: colorObj?.fg || "#fff",
       borderColor: colorObj?.bg ? "transparent" : "rgba(255,255,255,0.1)",
@@ -172,77 +126,67 @@ const StatusBadge = ({ label, colorObj, icon }: { label: string | number; colorO
   </span>
 );
 
-const SectionHeader = ({ title, subtitle, rightElement }: { title: string; subtitle?: React.ReactNode, rightElement?: React.ReactNode }) => (
-  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+const SectionHeader = ({
+  title,
+  subtitle,
+  rightElement,
+}: {
+  title: string;
+  subtitle?: React.ReactNode;
+  rightElement?: React.ReactNode;
+}) => (
+  <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
     <div>
-        <h3 style={S.sectionTitle}>{title}</h3>
-        {subtitle && <span style={S.sectionSubtitle}>{subtitle}</span>}
+      <h3 className="text-sm font-semibold text-white tracking-tight">{title}</h3>
+      {subtitle && <div className="text-xs text-zinc-500">{subtitle}</div>}
     </div>
     {rightElement}
   </div>
 );
 
-const MetricMini = ({ label, value, type = "text" }: { label: string; value: any, type?: "text" | "bar" }) => (
-  <div style={{ 
-    display: "flex", 
-    flexDirection: "column",
-    gap: "4px", 
-    minWidth: "80px"
-  }}>
-    <span style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: THEME.textMuted, fontWeight: 600 }}>{label}</span>
-    {type === "text" ? (
-         <span style={{ color: THEME.textMain, fontWeight: 600, fontSize: "14px" }}>{value ?? "n/a"}</span>
-    ) : (
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-         <span style={{ color: THEME.textMain, fontWeight: 600, fontSize: "14px" }}>{value ?? 0}</span>
-             <div style={{ width: "40px", height: "4px", background: THEME.barBg, borderRadius: "2px", overflow: "hidden" }}>
-                <div style={{ width: `${Math.min(100, (value || 0) * 10)}%`, height: "100%", background: THEME.accent }} />
-             </div>
+const MetricMini = ({
+  label,
+  value,
+  type = "text",
+  max,
+  suffix = "",
+}: {
+  label: string;
+  value: any;
+  type?: "text" | "bar";
+  max?: number;
+  suffix?: string;
+}) => {
+  const isNumeric = typeof value === "number" && Number.isFinite(value);
+  const numeric = isNumeric ? normalizeScore(value) : null;
+  const displayValue = isNumeric ? displayScore(numeric, suffix) : value ?? NO_DATA_LABEL;
+  const barPct = max && isNumeric ? pctFromScore(numeric, max) : 0;
+
+  return (
+    <div className="flex min-w-[80px] flex-col gap-1">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
+        {label}
+      </span>
+      {type === "text" ? (
+        <span className="text-sm font-semibold text-zinc-200">
+          {displayValue}
+        </span>
+      ) : (
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm font-semibold text-zinc-200">
+            {displayValue}
+          </span>
+          <div className="h-1 w-10 overflow-hidden rounded-full bg-white/10">
+            <div
+              className="h-full bg-emerald-500"
+              style={{ width: `${barPct}%` }}
+            />
+          </div>
         </div>
-    )}
-   
-  </div>
-);
-
-// CSS Grid responsive injected
-const responsiveCSS = `
-  .linear-grid { display: grid; grid-template-columns: 1fr; gap: 24px; }
-  .col-main { grid-column: span 1; }
-  .col-side { grid-column: span 1; }
-  .header-flex { display: flex; flex-direction: column; gap: 24px; }
-  
-  /* Adoption Grid: 2 columns on small, 3 on large */
-  .adoption-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
-
-  @media (min-width: 1024px) {
-    .linear-grid { grid-template-columns: repeat(12, 1fr); }
-    .col-main { grid-column: span 8; }
-    .col-side { grid-column: span 4; }
-    .header-flex { flex-direction: row; align-items: flex-end; justify-content: space-between; }
-  }
-  
-  /* Scrollbar clean */
-  .custom-scroll::-webkit-scrollbar { width: 6px; }
-  .custom-scroll::-webkit-scrollbar-track { background: transparent; }
-  .custom-scroll::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
-  .custom-scroll::-webkit-scrollbar-thumb:hover { background: #52525b; }
-
-  /* Table styles */
-  .table-row { transition: background 0.2s; }
-  .table-row:hover { background: rgba(255,255,255,0.03); }
-
-  /* Inputs */
-  .user-select {
-    background: rgba(0,0,0,0.3);
-    border: 1px solid ${THEME.border};
-    color: ${THEME.textMain};
-    padding: 4px 8px;
-    border-radius: 6px;
-    font-size: 12px;
-    outline: none;
-    cursor: pointer;
-  }
-`;
+      )}
+    </div>
+  );
+};
 
 export default async function LocationPage({
   params,
@@ -344,34 +288,28 @@ export default async function LocationPage({
     ? String(subscriptionSummary.status)
     : null;
   const subscriptionStatusLower = subscriptionStatus?.toLowerCase();
-  const subscriptionStatusStyle =
+  const subscriptionStatusClassName =
     subscriptionStatusLower === "active"
-      ? {
-          backgroundColor: "rgba(16,185,129,0.15)",
-          color: "#34d399",
-          borderColor: "rgba(16,185,129,0.35)",
-        }
-      : {
-          backgroundColor: "rgba(113,113,122,0.15)",
-          color: THEME.textMuted,
-          borderColor: THEME.border,
-        };
+      ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-300"
+      : "border-white/10 bg-white/5 text-zinc-400";
   
   // 0) Health
-  const { data: health } = await supabaseAdmin.rpc("gocroco_location_health_v2", {
-    target_location_id: location_id,
-    ref_day: null,
-  });
-  const badge = healthColor(health?.color);
-  const score = typeof health?.health_score === "number" ? Math.round(health.health_score) : null;
-  const status = health?.status ?? "n/a";
-  const trend = health?.trend?.indicator;
-  const loginScore = typeof health?.components?.login_activity_score === "number"
-    ? Math.round(health.components.login_activity_score)
-    : null;
-  
-  // Fake Page View Metric (since it wasn't in original data, derived or mocked for layout)
-  const pageViewCount = health?.components?.page_views ?? "2.4k"; 
+  const { data: healthRow, error: healthError } = await supabaseAdmin
+    .from("location_health_latest")
+    .select("location_id, health_score, login_score, features_score, trend_score, score_day, computed_at")
+    .eq("location_id", location_id)
+    .maybeSingle();
+
+  if (healthError) return <ErrorState msg={healthError.message} id={location_id} />;
+
+  const score = normalizeScore(healthRow?.health_score);
+  const status = scoreToStatus(score);
+  const badge = healthColor(scoreToColor(score));
+  const loginScore = loginDaysFromScore(normalizeScore(healthRow?.login_score));
+  const productAdoptionScore = normalizeScore(healthRow?.features_score);
+
+  // Page view metric not tracked here yet.
+  const pageViewCount = NO_DATA_LABEL;
 
   // A) Top features (location lifetime)
   const { data: lifetimeRows, error: e1 } = await supabaseAdmin
@@ -517,78 +455,30 @@ export default async function LocationPage({
 
   // --- RENDER ---
   return (
-    <main style={S.page}>
-      <style dangerouslySetInnerHTML={{ __html: responsiveCSS }} />
-      
-      <div style={S.container}>
+    <main className="min-h-screen bg-black text-zinc-400 font-sans p-6 md:p-10 selection:bg-zinc-800">
+      <div className="mx-auto max-w-[1280px]">
         {/* HEADER */}
-        <header
-          style={{
-            borderBottom: `1px solid ${THEME.border}`,
-            paddingBottom: "32px",
-            marginBottom: "32px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "20px",
-          }}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                alignItems: "flex-end",
-                justifyContent: "space-between",
-                gap: "16px",
-              }}
-            >
+        <header className="mb-8 flex flex-col gap-5 border-b border-white/10 pb-8">
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
-                <nav
-                  style={{
-                    fontSize: "12px",
-                    color: THEME.textMuted,
-                    marginBottom: "12px",
-                    display: "flex",
-                    gap: "8px",
-                  }}
-                >
-                  <a href="/locations" style={{ ...S.linkReset, color: THEME.textMuted }}>
+                <nav className="mb-3 flex gap-2 text-xs text-zinc-500">
+                  <a href="/locations" className="text-zinc-500 hover:text-zinc-300">
                     Locations
                   </a>
                   <span>/</span>
-                  <span style={{ color: THEME.textMain }}>{location_id}</span>
+                  <span className="text-zinc-200">{location_id}</span>
                 </nav>
-                <h1
-                  style={{
-                    fontSize: "32px",
-                    fontWeight: 700,
-                    color: "#fff",
-                    margin: 0,
-                    letterSpacing: "-0.02em",
-                  }}
-                >
+                <h1 className="text-3xl font-bold tracking-tight text-white">
                   {locationName}
                 </h1>
-                <div style={{ fontSize: "12px", color: THEME.textMuted, marginTop: "6px" }}>
-                  {location_id}
-                </div>
+                <div className="mt-1 text-xs text-zinc-500">{location_id}</div>
               </div>
 
-              <div style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
+              <div className="flex flex-wrap items-center gap-3">
                 <a
                   href={`/users?location_id=${encodeURIComponent(location_id)}`}
-                  style={{
-                    ...S.linkReset,
-                    padding: "8px 16px",
-                    backgroundColor: "#fff",
-                    color: "#000",
-                    fontSize: "13px",
-                    fontWeight: 600,
-                    borderRadius: "8px",
-                    height: "32px",
-                    display: "inline-flex",
-                    alignItems: "center",
-                  }}
+                  className="inline-flex h-8 items-center rounded-lg bg-white px-4 text-sm font-semibold text-black"
                 >
                   Users +
                 </a>
@@ -597,90 +487,51 @@ export default async function LocationPage({
                   companyId={locationRow?.company_id || ""}
                   locationId={location_id}
                   disabled={!location_id}
-                  buttonStyle={{
-                    padding: "8px 16px",
-                    backgroundColor: "transparent",
-                    color: THEME.textMain,
-                    fontSize: "13px",
-                    fontWeight: 600,
-                    borderRadius: "8px",
-                    border: `1px solid ${THEME.border}`,
-                    height: "32px",
-                    display: "inline-flex",
-                    alignItems: "center",
-                  }}
+                  buttonClassName="inline-flex h-8 items-center rounded-lg border border-white/10 px-4 text-sm font-semibold text-zinc-200 transition hover:border-white/20 hover:text-white"
                 />
               </div>
             </div>
 
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "16px",
-                marginTop: "4px",
-                fontSize: "14px",
-                flexWrap: "wrap",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <span
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "50%",
-                    background: THEME.accent,
-                    boxShadow: `0 0 8px ${THEME.accent}40`,
-                  }}
-                ></span>
-                <span style={{ color: THEME.textMain, fontWeight: 500 }}>
+            <div className="flex flex-wrap items-center gap-4 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.25)]" />
+                <span className="font-medium text-zinc-200">
                   {users.length} Active Users
                 </span>
               </div>
-              <span style={{ color: THEME.textDark }}>|</span>
-              <div style={{ color: THEME.textMuted }}>
+              <span className="text-zinc-700">|</span>
+              <div className="text-zinc-500">
                 Lifetime:{" "}
-                <span style={{ color: THEME.textMain, fontFamily: THEME.fontMono }}>
+                <span className="font-mono text-zinc-200">
                   {fmtSec(totalLifetime)}
                 </span>
               </div>
-              <span style={{ color: THEME.textDark }}>|</span>
-              <div style={{ color: THEME.textMuted }}>
+              <span className="text-zinc-700">|</span>
+              <div className="text-zinc-500">
                 Subscription:{" "}
-                <span style={{ color: THEME.textMain, fontFamily: THEME.fontMono }}>
+                <span className="font-mono text-zinc-200">
                   {subscriptionSummary?.plan || "n/a"}
                 </span>
                 {subscriptionMrr && (
-                  <span style={{ marginLeft: "8px", color: THEME.textMuted }}>
+                  <span className="ml-2 text-zinc-500">
                     MRR:{" "}
-                    <span style={{ color: THEME.textMain, fontFamily: THEME.fontMono }}>
+                    <span className="font-mono text-zinc-200">
                       {subscriptionMrr}
-                      {subscriptionSummary?.mrrInterval ? `/${subscriptionSummary.mrrInterval}` : ""}
+                      {subscriptionSummary?.mrrInterval
+                        ? `/${subscriptionSummary.mrrInterval}`
+                        : ""}
                     </span>
                   </span>
                 )}
                 {subscriptionStatus && (
                   <span
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      marginLeft: "8px",
-                      padding: "2px 8px",
-                      borderRadius: "999px",
-                      fontSize: "11px",
-                      fontWeight: 700,
-                      letterSpacing: "0.02em",
-                      textTransform: "uppercase",
-                      border: `1px solid ${subscriptionStatusStyle.borderColor}`,
-                      backgroundColor: subscriptionStatusStyle.backgroundColor,
-                      color: subscriptionStatusStyle.color,
-                    }}
+                    className={`ml-2 inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider ${subscriptionStatusClassName}`}
                   >
                     {subscriptionStatus}
                   </span>
                 )}
                 {firstSeenDate && (
-                  <span style={{ marginLeft: "8px", color: THEME.textDark }}>
+                  <span className="ml-2 text-zinc-700">
                     First seen: {firstSeenDate}
                   </span>
                 )}
@@ -688,71 +539,59 @@ export default async function LocationPage({
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "24px", alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div className="flex flex-wrap items-end gap-6">
             {/* Metrics Group */}
-            <div
-              style={{
-                display: "flex",
-                gap: "24px",
-                paddingRight: "24px",
-                borderRight: `1px solid ${THEME.border}`,
-              }}
-            >
-              <MetricMini label="Login Activity" value={`${loginScore || 0}/5`} />
+            <div className="flex gap-6 border-r border-white/10 pr-6">
+              <MetricMini label="Login Days (7d)" value={loginScore} suffix=" days" />
               <MetricMini
                 label="Product Adoption"
-                value={health?.components?.product_adoption_score}
+                value={productAdoptionScore}
                 type="bar"
+                max={FEATURES_SCORE_MAX}
               />
               <MetricMini label="Page Views" value={pageViewCount} />
             </div>
 
             {/* Main Health Score */}
-            <div style={{ textAlign: "right" }}>
-              <div
-                style={{
-                  fontSize: "10px",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em",
-                  color: THEME.textMuted,
-                  fontWeight: 600,
-                  marginBottom: "4px",
-                }}
-              >
+            <div className="text-right">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
                 Health Score
               </div>
-              <div style={{ display: "flex", alignItems: "baseline", gap: "8px", justifyContent: "flex-end" }}>
-                <span style={{ fontSize: "32px", fontWeight: 700, color: "#fff", lineHeight: 1 }}>
-                  {score === null ? "n/a" : score}
+              <div className="flex items-baseline justify-end gap-2">
+                <span className="text-3xl font-bold leading-none text-white">
+                  {score === null ? NO_DATA_LABEL : score}
                 </span>
-                <span style={{ fontSize: "14px", fontWeight: 500, color: badge.fg }}>{status}</span>
+                <span className="text-sm font-medium" style={{ color: badge.fg }}>
+                  {status}
+                </span>
               </div>
             </div>
           </div>
         </header>
+
         {/* BENTO GRID */}
-        <div className="linear-grid">
-          
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           {/* COL 1 (Main: Trends, Risk, Adoption) */}
-          <div className="col-main" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-            
+          <div className="flex flex-col gap-6 lg:col-span-8">
             {/* SPARKLINE */}
-            <div style={{ ...S.card, minHeight: "200px", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+            <div className="flex min-h-[200px] flex-col justify-between rounded-xl border border-white/5 bg-zinc-900/40 p-5 backdrop-blur-sm">
               <SectionHeader title="Activity Trend" subtitle="Last 14 Days" />
-              <div style={{ display: "flex", alignItems: "flex-end", gap: "4px", height: "120px", width: "100%", paddingTop: "16px" }}>
+              <div className="flex h-[120px] items-end gap-1 pt-4">
                 {series.map((p) => {
                   const heightPct = Math.max(5, Math.round((p.sec / max) * 100));
                   return (
-                    <div key={p.day} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "8px", height: "100%", justifyContent: "flex-end" }} title={`${p.day}: ${fmtSec(p.sec)}`}>
-                      <div 
-                        style={{ 
-                          width: "100%", 
-                          height: `${heightPct}%`, 
-                          background: p.sec ? "#3f3f46" : "#27272a", 
-                          borderRadius: "2px",
-                          transition: "all 0.3s ease",
-                          opacity: p.sec ? 1 : 0.3
-                        }} 
+                    <div
+                      key={p.day}
+                      className="flex h-full flex-1 flex-col items-center justify-end gap-2"
+                      title={`${p.day}: ${fmtSec(p.sec)}`}
+                    >
+                      <div
+                        className="w-full rounded-sm transition-all"
+                        style={{
+                          height: `${heightPct}%`,
+                          background: p.sec ? "#3f3f46" : "#27272a",
+                          opacity: p.sec ? 1 : 0.3,
+                        }}
                       />
                     </div>
                   );
@@ -761,59 +600,81 @@ export default async function LocationPage({
             </div>
 
             {/* AT RISK USERS TABLE */}
-            <div style={S.card}>
-              <SectionHeader 
-                title="Attention Required" 
-                subtitle={<span style={{ color: "#fb923c", fontWeight: 500 }}>{topAtRisk.length} Users At Risk</span>} 
+            <div className="rounded-xl border border-white/5 bg-zinc-900/40 p-5 backdrop-blur-sm">
+              <SectionHeader
+                title="Attention Required"
+                subtitle={
+                  <span className="font-medium text-orange-400">
+                    {topAtRisk.length} Users At Risk
+                  </span>
+                }
               />
-              
+
               {topAtRisk.length === 0 ? (
-                 <div style={{ fontSize: "13px", color: THEME.textMuted, fontStyle: "italic", padding: "16px 0" }}>No users currently flagged as at-risk.</div>
+                <div className="py-4 text-sm italic text-zinc-500">
+                  No users currently flagged as at-risk.
+                </div>
               ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px", textAlign: "left" }}>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
                     <thead>
-                      <tr style={{ borderBottom: `1px solid ${THEME.border}` }}>
-                        <th style={{ padding: "0 0 12px 0", color: THEME.textMuted, fontWeight: 500, fontSize: "11px", textTransform: "uppercase" }}>User</th>
-                        <th style={{ padding: "0 0 12px 0", color: THEME.textMuted, fontWeight: 500, fontSize: "11px", textTransform: "uppercase", textAlign: "right" }}>Health</th>
-                        <th style={{ padding: "0 0 12px 16px", color: THEME.textMuted, fontWeight: 500, fontSize: "11px", textTransform: "uppercase" }}>Primary Risk Factors</th>
+                      <tr className="border-b border-white/10">
+                        <th className="pb-3 text-[11px] font-medium uppercase text-zinc-500">
+                          User
+                        </th>
+                        <th className="pb-3 text-right text-[11px] font-medium uppercase text-zinc-500">
+                          Health
+                        </th>
+                        <th className="pb-3 pl-4 text-[11px] font-medium uppercase text-zinc-500">
+                          Primary Risk Factors
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
                       {topAtRisk.map((u) => {
-                          const uScore = Math.round(u.health?.health_score || 0);
-                          const uTrend = u.health?.trend?.indicator;
-                          const tags = riskTags(u.risk).slice(0, 2);
+                        const uScore = Math.round(u.health?.health_score || 0);
+                        const uTrend = u.health?.trend?.indicator;
+                        const tags = riskTags(u.risk).slice(0, 2);
                         return (
-                          <tr key={u.email} className="table-row" style={{ borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
-                            <td style={{ padding: "12px 16px 12px 0" }}>
-                              <a href={`/users/${encodeURIComponent(u.email)}?location_id=${encodeURIComponent(location_id)}`} style={S.linkReset}>
-                                <div style={{ color: THEME.textMain, fontWeight: 500 }}>{u.email}</div>
-                                <div style={{ fontSize: "11px", color: THEME.textMuted, marginTop: "2px" }}>{u.last_url || "No activity"}</div>
+                          <tr
+                            key={u.email}
+                            className="border-b border-white/5 transition-colors hover:bg-white/[0.03]"
+                          >
+                            <td className="py-3 pr-4">
+                              <a
+                                href={`/users/${encodeURIComponent(
+                                  u.email
+                                )}?location_id=${encodeURIComponent(location_id)}`}
+                                className="text-inherit no-underline"
+                              >
+                                <div className="font-medium text-zinc-200">
+                                  {u.email}
+                                </div>
+                                <div className="mt-0.5 text-[11px] text-zinc-500">
+                                  {u.last_url || "No activity"}
+                                </div>
                               </a>
                             </td>
-                            <td style={{ padding: "12px 0", textAlign: "right" }}>
-                               <StatusBadge 
-                                 label={uScore} 
-                                 colorObj={healthColor(u.health?.color)} 
-                                 icon={trendIcon(uTrend)} 
-                               />
+                            <td className="py-3 text-right">
+                              <StatusBadge
+                                label={uScore}
+                                colorObj={healthColor(u.health?.color)}
+                                icon={trendIcon(uTrend)}
+                              />
                             </td>
-                            <td style={{ padding: "12px 0 12px 16px" }}>
-                              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                                {tags.map(t => (
-                                  <span key={t} style={{ 
-                                    fontSize: "10px", 
-                                    padding: "2px 6px", 
-                                    borderRadius: "4px", 
-                                    border: `1px solid ${THEME.border}`, 
-                                    color: THEME.textMuted,
-                                    background: "rgba(255,255,255,0.02)"
-                                  }}>
+                            <td className="py-3 pl-4">
+                              <div className="flex flex-wrap gap-1.5">
+                                {tags.map((t) => (
+                                  <span
+                                    key={t}
+                                    className="rounded border border-white/10 bg-white/[0.02] px-1.5 py-0.5 text-[10px] text-zinc-500"
+                                  >
                                     {t}
                                   </span>
                                 ))}
-                                {tags.length === 0 && <span style={{ color: THEME.textDark }}>n/a</span>}
+                                {tags.length === 0 && (
+                                  <span className="text-zinc-700">n/a</span>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -825,66 +686,89 @@ export default async function LocationPage({
               )}
             </div>
 
-            {/* FEATURE ADOPTION BLOCK (New Grid Layout) */}
-            <div style={S.card}>
-               <div style={{ marginBottom: "20px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                         <h3 style={S.sectionTitle}>Feature Adoption</h3>
-                         <span style={{ fontSize: "13px", color: THEME.textMain, fontWeight: 500 }}>{adoptionPercentage}%</span>
-                    </div>
-                    {/* Progress Bar */}
-                    <div style={{ width: "100%", height: "6px", background: THEME.barBg, borderRadius: "3px", overflow: "hidden" }}>
-                        <div style={{ width: `${adoptionPercentage}%`, height: "100%", background: THEME.accent }} />
-                    </div>
-               </div>
-               
-               <div className="adoption-grid">
-                  {displayFeatures.map((f) => {
-                    const used = featureTimeByKey.get(f.key) || 0;
-                    const adopted = used >= ADOPTED_THRESHOLD_SEC;
-                    return (
-                        <div key={f.key} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                             <div style={{ 
-                                 width: "16px", 
-                                 height: "16px", 
-                                 borderRadius: "4px", 
-                                 background: adopted ? THEME.accent : "transparent",
-                                 border: adopted ? "none" : `1px solid ${THEME.border}`,
-                                 display: "flex", alignItems: "center", justifyContent: "center"
-                             }}>
-                                 {adopted && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                             </div>
-                             <span style={{ 
-                                 fontSize: "13px", 
-                                 color: adopted ? THEME.textMain : THEME.textMuted,
-                                 textDecoration: adopted ? "none" : "none" 
-                             }}>
-                                 {f.label}
-                             </span>
-                        </div>
-                    )
-                  })}
-               </div>
-            </div>
+            {/* FEATURE ADOPTION BLOCK */}
+            <div className="rounded-xl border border-white/5 bg-zinc-900/40 p-5 backdrop-blur-sm">
+              <div className="mb-5">
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-white tracking-tight">
+                    Feature Adoption
+                  </h3>
+                  <span className="text-sm font-medium text-zinc-200">
+                    {adoptionPercentage}%
+                  </span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full bg-emerald-500"
+                    style={{ width: `${adoptionPercentage}%` }}
+                  />
+                </div>
+              </div>
 
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3">
+                {displayFeatures.map((f) => {
+                  const used = featureTimeByKey.get(f.key) || 0;
+                  const adopted = used >= ADOPTED_THRESHOLD_SEC;
+                  return (
+                    <div key={f.key} className="flex items-center gap-2.5">
+                      <div
+                        className={`flex h-4 w-4 items-center justify-center rounded ${
+                          adopted
+                            ? "bg-emerald-500 text-black"
+                            : "border border-white/10"
+                        }`}
+                      >
+                        {adopted && (
+                          <svg
+                            width="10"
+                            height="8"
+                            viewBox="0 0 10 8"
+                            fill="none"
+                          >
+                            <path
+                              d="M1 4L3.5 6.5L9 1"
+                              stroke="black"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        )}
+                      </div>
+                      <span
+                        className={`text-sm ${
+                          adopted ? "text-zinc-200" : "text-zinc-500"
+                        }`}
+                      >
+                        {f.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
 
           {/* COL 2 (Sidebar: Top, Feature Usage) */}
-          <div className="col-side" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-            
+          <div className="flex flex-col gap-6 lg:col-span-4">
             {/* Top Features */}
-            <div style={S.card}>
+            <div className="rounded-xl border border-white/5 bg-zinc-900/40 p-5 backdrop-blur-sm">
               <SectionHeader title="Top Features" subtitle="Lifetime" />
-              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              <div className="flex flex-col gap-3">
                 {topFeatures.map((f, i) => (
-                  <div key={f.feature_key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "12px", overflow: "hidden" }}>
-                      <span style={{ fontSize: "11px", fontFamily: THEME.fontMono, color: THEME.textDark, width: "16px" }}>{i + 1}</span>
-                      <span style={{ fontSize: "13px", fontWeight: 500, color: THEME.textMain, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div
+                    key={f.feature_key}
+                    className="flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <span className="w-4 text-[11px] font-mono text-zinc-700">
+                        {i + 1}
+                      </span>
+                      <span className="truncate text-sm font-medium text-zinc-200">
                         {labelForFeature(f.feature_key)}
                       </span>
                     </div>
-                    <span style={{ fontSize: "11px", fontFamily: THEME.fontMono, color: THEME.textMuted, background: "rgba(255,255,255,0.03)", padding: "2px 6px", borderRadius: "4px" }}>
+                    <span className="rounded bg-white/[0.03] px-1.5 py-0.5 text-[11px] font-mono text-zinc-500">
                       {fmtSec(f.time_sec)}
                     </span>
                   </div>
@@ -893,51 +777,61 @@ export default async function LocationPage({
             </div>
 
             {/* Feature Usage (Time Spent) + Filter */}
-            <div style={{ ...S.card, maxHeight: "calc(100vh - 200px)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-              <div style={{ flexShrink: 0 }}>
-                  <SectionHeader 
-                    title="Feature Usage" 
-                    subtitle={selectedEmail ? `Time Spent - ${selectedEmail}` : "Time Spent"}
-                    rightElement={
-                        <FeatureUsageUserSelect users={users} selectedEmail={selectedEmail} />
-                    }
-                  />
-                  <div style={{ 
-                      display: "flex", justifyContent: "space-between", 
-                      fontSize: "11px", textTransform: "uppercase", color: THEME.textDark, fontWeight: 600,
-                      paddingBottom: "12px", borderBottom: `1px solid ${THEME.border}`, marginBottom: "12px"
-                  }}>
-                      <span>Feature</span>
-                      <span>Duration</span>
-                  </div>
+            <div className="flex max-h-[calc(100vh-200px)] flex-col overflow-hidden rounded-xl border border-white/5 bg-zinc-900/40 p-5 backdrop-blur-sm">
+              <div className="flex-shrink-0">
+                <SectionHeader
+                  title="Feature Usage"
+                  subtitle={
+                    selectedEmail
+                      ? `Time Spent - ${selectedEmail}`
+                      : "Time Spent"
+                  }
+                  rightElement={
+                    <FeatureUsageUserSelect
+                      users={users}
+                      selectedEmail={selectedEmail}
+                    />
+                  }
+                />
+                <div className="mb-3 flex justify-between border-b border-white/10 pb-3 text-[11px] font-semibold uppercase text-zinc-700">
+                  <span>Feature</span>
+                  <span>Duration</span>
+                </div>
               </div>
 
-              <div className="custom-scroll" style={{ overflowY: "auto", paddingRight: "4px" }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                    {displayFeatures.map((f) => {
-                        const time = usageFeatureTimeByKey.get(f.key) || 0;
-                        const barWidth = Math.min(100, (time / usageTopTime) * 100);
-                        return (
-                            <div key={f.key} style={{ position: "relative", padding: "6px 8px", borderRadius: "6px", overflow: "hidden" }}>
-                                {/* Subtle BG bar for relative value visual */}
-                                <div style={{ 
-                                    position: "absolute", top: 0, left: 0, bottom: 0, 
-                                    width: `${barWidth}%`, background: "rgba(255,255,255,0.03)", zIndex: 0 
-                                }} />
-                                
-                                <div style={{ position: "relative", zIndex: 1, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                    <span style={{ fontSize: "13px", color: THEME.textMain }}>{f.label}</span>
-                                    <span style={{ fontSize: "12px", fontFamily: THEME.fontMono, color: time > 0 ? THEME.textMuted : THEME.textDark }}>
-                                        {time > 0 ? fmtSec(time) : "n/a"}
-                                    </span>
-                                </div>
-                            </div>
-                        )
-                    })}
+              <div className="custom-scroll overflow-y-auto pr-1">
+                <div className="flex flex-col gap-1">
+                  {displayFeatures.map((f) => {
+                    const time = usageFeatureTimeByKey.get(f.key) || 0;
+                    const barWidth = Math.min(
+                      100,
+                      (time / usageTopTime) * 100
+                    );
+                    return (
+                      <div
+                        key={f.key}
+                        className="relative overflow-hidden rounded-md px-2 py-1.5"
+                      >
+                        <div
+                          className="absolute inset-y-0 left-0 z-0 bg-white/[0.03]"
+                          style={{ width: `${barWidth}%` }}
+                        />
+                        <div className="relative z-10 flex items-center justify-between">
+                          <span className="text-sm text-zinc-200">{f.label}</span>
+                          <span
+                            className={`text-xs font-mono ${
+                              time > 0 ? "text-zinc-500" : "text-zinc-700"
+                            }`}
+                          >
+                            {time > 0 ? fmtSec(time) : "n/a"}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>
-
           </div>
         </div>
       </div>
@@ -948,12 +842,17 @@ export default async function LocationPage({
 // --- Error Helper ---
 function ErrorState({ msg, id }: { msg: string; id: string }) {
   return (
-    <main style={{ ...S.page, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" }}>
-      <h1 style={{ fontSize: "24px", fontWeight: 700, color: "#fff", marginBottom: "16px" }}>Error loading {id}</h1>
-      <pre style={{ background: "rgba(127, 29, 29, 0.2)", color: "#fecaca", padding: "16px", borderRadius: "8px", border: "1px solid rgba(127, 29, 29, 0.4)" }}>{msg}</pre>
+    <main className="flex min-h-screen flex-col items-center justify-center bg-black p-6 text-center text-zinc-400">
+      <h1 className="mb-4 text-2xl font-bold text-white">
+        Error loading {id}
+      </h1>
+      <pre className="rounded-lg border border-red-900/40 bg-red-900/20 p-4 text-sm text-red-200">
+        {msg}
+      </pre>
     </main>
   );
 }
+
 
 
 

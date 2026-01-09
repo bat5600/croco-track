@@ -1,6 +1,5 @@
 "use client";
 
-import type { CSSProperties } from "react";
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
@@ -14,20 +13,25 @@ type Props = {
   companyId: string;
   locationId: string;
   disabled?: boolean;
-  buttonStyle: CSSProperties;
+  buttonClassName: string;
 };
 
-function SyncButton({ disabled, buttonStyle }: { disabled?: boolean; buttonStyle: CSSProperties }) {
+function SyncButton({
+  disabled,
+  buttonClassName,
+}: {
+  disabled?: boolean;
+  buttonClassName: string;
+}) {
   const { pending } = useFormStatus();
+  const isDisabled = disabled || pending;
   return (
     <button
       type="submit"
-      disabled={disabled || pending}
-      style={{
-        ...buttonStyle,
-        opacity: disabled || pending ? 0.5 : 1,
-        cursor: disabled || pending ? "not-allowed" : "pointer",
-      }}
+      disabled={isDisabled}
+      className={`${buttonClassName} ${
+        isDisabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+      }`}
     >
       {pending ? "Syncing..." : "Sync location"}
     </button>
@@ -39,23 +43,20 @@ export default function SyncLocationForm({
   companyId,
   locationId,
   disabled,
-  buttonStyle,
+  buttonClassName,
 }: Props) {
   const [state, formAction] = useActionState(action, { ok: null, message: null });
 
   return (
-    <form action={formAction} style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+    <form action={formAction} className="flex flex-col items-start">
       <input type="hidden" name="company_id" value={companyId} />
       <input type="hidden" name="location_id" value={locationId} />
-      <SyncButton disabled={disabled} buttonStyle={buttonStyle} />
+      <SyncButton disabled={disabled} buttonClassName={buttonClassName} />
       {state.message && (
         <span
-          style={{
-            marginTop: "6px",
-            fontSize: "11px",
-            color: state.ok ? "#34d399" : "#f87171",
-            fontWeight: 500,
-          }}
+          className={`mt-1.5 text-[11px] font-medium ${
+            state.ok ? "text-emerald-400" : "text-red-400"
+          }`}
         >
           {state.message}
         </span>

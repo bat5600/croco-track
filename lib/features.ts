@@ -16,5 +16,8 @@ export const FEATURES = [
   { key: "funnels-websites", label: "Funnels Websites" },
   { key: "form-builder", label: "Form Builder" },
   { key: "survey-builder", label: "Survey Builder" },
+  { key: "66a97ca06e16787562476424", label: "CrocoLive" },
+  { key: "5e9efed3-e795-4fe6-8e56-9f9bb6c730fb", label: "CrocoLab" },
+  { key: "0bae2e9d-79d4-4513-84e1-a3056dc45acb", label: "CrocoClub" },
   { key: "other", label: "Other" },
 ];

@@ -24,6 +24,13 @@ export function parseFeatureFromUrl(url: string): ParsedFeature | null {
     const feature = parts[locIndex + 2] ?? null;
     if (!feature) return null;
 
+    if (feature === "custom-page-link" || feature === "custom-menu-link") {
+      const customKey = parts.slice(locIndex + 3).join("/");
+      if (customKey) {
+        return { feature_key: customKey, feature_raw: feature };
+      }
+    }
+
     const nextSegment = parts[locIndex + 3] ?? null;
     if (feature === "marketing" && nextSegment === "emails") {
       return { feature_key: "email", feature_raw: null };

@@ -9,6 +9,14 @@ import {
   getFeatureLabel,
 } from "@/lib/featureAggregation";
 import { trendIcon, healthColor } from "@/lib/ui"; // Assurez-vous d'importer ces helpers si disponibles, sinon je les simulerai
+import {
+  FEATURES_SCORE_MAX,
+  normalizeScore,
+  NO_DATA_LABEL,
+  pctFromScore,
+  scoreToColor,
+  scoreToStatus,
+} from "@/lib/health";
 
 // --- Helpers ---
 function fmtSec(sec: number) {
@@ -48,21 +56,39 @@ const SectionHeader = ({ title, subtitle, rightElement }: { title: string; subti
   </div>
 );
 
-const MetricMini = ({ label, value, type = "text" }: { label: string; value: any, type?: "text" | "bar" }) => (
-  <div className="flex flex-col gap-1 min-w-[80px]">
-    <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">{label}</span>
-    {type === "text" ? (
-         <span className="text-sm font-semibold text-zinc-200">{value ?? "???"}</span>
-    ) : (
-        <div className="flex items-center gap-2">
-             <span className="text-sm font-semibold text-zinc-200">{value ?? 0}</span>
-             <div className="w-10 h-1 bg-white/10 rounded-full overflow-hidden">
-                <div style={{ width: `${Math.min(100, (Number(value) || 0) * 10)}%` }} className="h-full bg-emerald-500" />
-             </div>
-        </div>
-    )}
-  </div>
-);
+const MetricMini = ({
+  label,
+  value,
+  type = "text",
+  max,
+  suffix = "",
+}: {
+  label: string;
+  value: any;
+  type?: "text" | "bar";
+  max?: number;
+  suffix?: string;
+}) => {
+  const numeric = normalizeScore(value);
+  const displayValue = numeric === null ? NO_DATA_LABEL : `${numeric}${suffix}`;
+  const barPct = max ? pctFromScore(numeric, max) : 0;
+
+  return (
+    <div className="flex flex-col gap-1 min-w-[80px]">
+      <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">{label}</span>
+      {type === "text" ? (
+           <span className="text-sm font-semibold text-zinc-200">{displayValue}</span>
+      ) : (
+          <div className="flex items-center gap-2">
+               <span className="text-sm font-semibold text-zinc-200">{displayValue}</span>
+               <div className="w-10 h-1 bg-white/10 rounded-full overflow-hidden">
+                  <div style={{ width: `${barPct}%` }} className="h-full bg-emerald-500" />
+               </div>
+          </div>
+      )}
+    </div>
+  );
+};
 
 const StatusBadge = ({ label, colorObj }: { label: string | number; colorObj?: any }) => (
   <span
@@ -146,25 +172,37 @@ export default async function UserPage({
   const scores = healthList
     .map((h) => (typeof h?.health_score === "number" ? Number(h.health_score) : null))
     .filter((n): n is number => typeof n === "number");
-  const avgScore = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+  const avgScore = scores.length
+    ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+    : null;
 
   const worstHealth =
     healthList
       .filter((h) => typeof h?.health_score === "number")
       .sort((a, b) => Number(a.health_score) - Number(b.health_score))[0] || null;
 
-  const status = worstHealth?.status ?? "n/a";
-  const badgeColors = healthColor ? healthColor(worstHealth?.color) : { bg: "#333", fg: "#fff" }; // Fallback safe
-  
-  const loginDays7Max = Math.max(0, ...healthList.map((h) => Number(h?.login?.days7 || 0)));
-  const loginScore = Math.min(5, loginDays7Max); 
-  
-  const adoptionScores = healthList
-    .map((h) => (typeof h?.components?.product_adoption_score === "number" ? Number(h.components.product_adoption_score) : null))
+  const status = scoreToStatus(avgScore);
+  const badgeColors = healthColor ? healthColor(scoreToColor(avgScore)) : { bg: "#333", fg: "#fff" };
+
+  const loginDays = healthList
+    .map((h) => (typeof h?.login?.days7 === "number" ? Number(h.login.days7) : null))
     .filter((n): n is number => typeof n === "number");
-  const productAdoptionScore = adoptionScores.length
-    ? Math.round((adoptionScores.reduce((a, b) => a + b, 0) / adoptionScores.length) * 10) / 10
-    : null;
+  const loginScore = normalizeScore(
+    loginDays.length ? loginDays.reduce((a, b) => a + b, 0) / loginDays.length : null
+  );
+
+  const adoptionScores = healthList
+    .map((h) =>
+      typeof h?.components?.product_adoption_score === "number"
+        ? Number(h.components.product_adoption_score)
+        : null
+    )
+    .filter((n): n is number => typeof n === "number");
+  const productAdoptionScore = normalizeScore(
+    adoptionScores.length
+      ? adoptionScores.reduce((a, b) => a + b, 0) / adoptionScores.length
+      : null
+  );
 
   const pageViewCount = healthList.reduce((acc, h) => {
     const v = h?.components?.page_views;
@@ -304,8 +342,13 @@ export default async function UserPage({
           <div className="flex gap-8 items-end">
              {/* Metrics Group */}
              <div className="flex gap-6 pr-6 border-r border-white/10">
-                 <MetricMini label="Login Activity" value={`${loginScore}/5`} />
-                 <MetricMini label="Product Adoption" value={productAdoptionScore ?? (adoptionPercentage / 10)} type="bar" />
+                 <MetricMini label="Login Days (7d)" value={loginScore} suffix=" days" />
+                 <MetricMini
+                   label="Product Adoption"
+                   value={productAdoptionScore}
+                   type="bar"
+                   max={FEATURES_SCORE_MAX}
+                 />
                  <MetricMini label="Page Views" value={pageViewCount} />
              </div>
 
@@ -313,7 +356,7 @@ export default async function UserPage({
               <div className="text-right">
                     <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1">Health Score</div>
                     <div className="flex items-baseline gap-2 justify-end">
-                        <span className="text-3xl font-bold text-white leading-none">{avgScore === null ? "N/A" : avgScore}</span>
+                        <span className="text-3xl font-bold text-white leading-none">{avgScore === null ? NO_DATA_LABEL : avgScore}</span>
                         <StatusBadge label={status} colorObj={badgeColors} />
                     </div>
               </div>

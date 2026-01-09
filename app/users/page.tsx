@@ -3,6 +3,14 @@ export const dynamic = "force-dynamic";
 
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { fmtSec, healthColor, trendIcon, riskTags } from "@/lib/ui";
+import {
+  LOGIN_DAYS_WINDOW,
+  normalizeScore,
+  NO_DATA_LABEL,
+  pctFromScore,
+  scoreToColor,
+  scoreToStatus,
+} from "@/lib/health";
 
 // --- Types ---
 type LastSeenRow = {
@@ -26,7 +34,7 @@ type ViewRow = EmailRow & {
   health_color: string | undefined;
   trend: string | undefined;
   risk_tags: string[];
-  login_days_capped: number;
+  login_score: number | null;
   login_pct: number;
 };
 
@@ -180,7 +188,7 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
   const ENRICH_LIMIT = 60;
   const toEnrich = aggregatedRows.slice(0, ENRICH_LIMIT);
 
-  const healthMap = new Map<string, { score: number | null; status: string; color: string | undefined; trend: string | undefined; login_days_capped: number; login_pct: number }>();
+  const healthMap = new Map<string, { score: number | null; status: string; color: string | undefined; trend: string | undefined; login_score: number | null; login_pct: number }>();
   const riskMap = new Map<string, string[]>();
 
   await Promise.all(
@@ -210,16 +218,24 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
       ]);
 
       const scores = healthList
-        .map((h) => (typeof h?.health_score === "number" ? Number(h.health_score) : null))
+        .map((h) =>
+          typeof h?.health_score === "number" ? Number(h.health_score) : null
+        )
         .filter((n): n is number => typeof n === "number");
-      const avgScore = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+      const avgScore = scores.length
+        ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+        : null;
       const worstHealth =
         healthList
           .filter((h) => typeof h?.health_score === "number")
           .sort((a, b) => Number(a.health_score) - Number(b.health_score))[0] || null;
-      const status = String(worstHealth?.status || "Unknown");
-      const loginDaysMax = Math.max(0, ...healthList.map((h) => Number(h?.login?.days7 || 0)));
-      const loginDaysCapped = Math.min(5, loginDaysMax);
+      const status = scoreToStatus(avgScore);
+      const loginDays = healthList
+        .map((h) => (typeof h?.login?.days7 === "number" ? Number(h.login.days7) : null))
+        .filter((n): n is number => typeof n === "number");
+      const avgLoginDays = loginDays.length
+        ? Math.round(loginDays.reduce((a, b) => a + b, 0) / loginDays.length)
+        : null;
 
       const riskTagSet = new Set<string>();
       for (const risk of riskList) {
@@ -229,10 +245,10 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
       healthMap.set(u.email, {
         score: avgScore,
         status,
-        color: worstHealth?.color,
+        color: scoreToColor(avgScore),
         trend: worstHealth?.trend?.indicator,
-        login_days_capped: loginDaysCapped,
-        login_pct: Math.round((loginDaysCapped / 5) * 100),
+        login_score: normalizeScore(avgLoginDays),
+        login_pct: pctFromScore(avgLoginDays, LOGIN_DAYS_WINDOW),
       });
       riskMap.set(u.email, Array.from(riskTagSet).slice(0, 2));
     })
@@ -247,11 +263,11 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
       ...u,
       total_sec: total,
       health_score: typeof health?.score === "number" ? Math.round(health.score) : null,
-      health_status: health?.status || "Unknown",
+      health_status: health?.status || NO_DATA_LABEL,
       health_color: health?.color,
       trend: health?.trend,
       risk_tags: risk,
-      login_days_capped: health?.login_days_capped ?? 0,
+      login_score: health?.login_score ?? null,
       login_pct: health?.login_pct ?? 0,
     };
   });
@@ -322,7 +338,7 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
                 <option value="healthy">Healthy</option>
                 <option value="steady">Steady</option>
                 <option value="at-risk">At-risk</option>
-                <option value="unknown">Unknown</option>
+                <option value="collecting data...">Collecting data</option>
              </Select>
 
              <Select name="sort" defaultValue={sort}>
@@ -357,7 +373,7 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
                   <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-1/4">User / Locations</th>
                   <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-40">Health Status</th>
                   <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-40">Last Seen</th>
-                  <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-48">Login Activity (7d)</th>
+                  <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-48">Login Days (7d)</th>
                   <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider w-32">Lifetime</th>
                   <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Risk Factors</th>
                   <th className="px-6 py-4 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider text-right w-24">Actions</th>
@@ -368,6 +384,10 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
                   const key = `${u.email}`;
                   const isEnriched = u.health_score !== null;
                   const badge = healthColor(u.health_color);
+                  const loginLabel =
+                    u.login_score === null
+                      ? NO_DATA_LABEL
+                      : `${u.login_score}/${LOGIN_DAYS_WINDOW} days`;
 
                   return (
                     <tr key={key} className="group hover:bg-white/[0.02] transition-colors">
@@ -408,12 +428,12 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
                                 }}
                               >
                                  <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: badge.fg, boxShadow: `0 0 6px ${badge.fg}40` }} />
-                                 {u.health_score} • {u.health_status}
+                                 {u.health_score ?? NO_DATA_LABEL} • {u.health_status}
                                  {u.trend && <span className="opacity-80 ml-0.5">{trendIcon(u.trend)}</span>}
                               </span>
                            </div>
                         ) : (
-                           <span className="text-[10px] text-zinc-600 font-mono italic">Waiting for data...</span>
+                           <span className="text-[10px] text-zinc-600 font-mono italic">{NO_DATA_LABEL}</span>
                         )}
                       </td>
 
@@ -429,7 +449,7 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
                       <td className="px-6 py-4">
                          <div className="flex flex-col gap-2">
                              <div className="flex justify-between items-baseline text-xs max-w-[120px]">
-                                 <span className="font-semibold text-zinc-300">{u.login_days_capped}<span className="text-zinc-600 font-normal">/5 days</span></span>
+                                 <span className="font-semibold text-zinc-300">{loginLabel}</span>
                              </div>
                              <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden w-full max-w-[120px]">
                                 <div 
