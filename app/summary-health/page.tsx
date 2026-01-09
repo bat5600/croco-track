@@ -534,7 +534,7 @@ export default async function SummaryHealthPage() {
               <span className="font-semibold text-white">location_health_latest</span>.
             </div>
             <div>
-              Health status tiers: Thriving (>= 80), Healthy (>= 60), Steady (>= 45), At-risk (&lt; 45).
+              Health status tiers: Thriving (&gt;= 80), Healthy (&gt;= 60), Steady (&gt;= 45), At-risk (&lt; 45).
             </div>
             <div>
               Login days (7d) counts unique active days; scores are capped at 5 days.
